@@ -26,7 +26,9 @@
       <tr class="hover:bg-gray-750">
         <td class="px-6 py-4 font-mono text-xs text-gray-400">{{ u.id }}</td>
         <td class="px-6 py-4">
-          <div class="font-medium text-white">{{ u.first_name }} {{ u.last_name or '' }}</div>
+          <div class="font-medium text-white">{{ u.first_name }} {{ u.last_name or '' }}
+            {% if u.is_seed %}<span class="ml-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-gray-700 text-gray-300">🧪 сид</span>{% endif %}
+          </div>
           {% if u.username %}
           <div class="text-xs text-indigo-400">@{{ u.username }}</div>
           {% endif %}

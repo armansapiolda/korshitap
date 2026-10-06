@@ -13,7 +13,7 @@ from sqlalchemy import select
 
 from app.bot.handlers.recommendations import format_candidate_card
 from app.bot.keyboards.reply import MENU_DISTRICTS_KZ, MENU_DISTRICTS_RU
-from app.bot.notifications import get_chat_url
+from app.bot.cards import person_keyboard, safety_tip, send_card
 from app.constants import CITIES, CITY_DISTRICTS, DEFAULT_CITY
 from app.db.base import async_session_factory
 from app.db.models import Listing, SeekerProfile, User
@@ -51,7 +51,7 @@ async def render_district_list(
         stmt = (
             select(SeekerProfile, User)
             .join(User, SeekerProfile.user_id == User.id)
-            .where(SeekerProfile.is_active == True, User.id != user.id)
+            .where(SeekerProfile.is_active == True, User.is_blocked == False, User.id != user.id)
         )
         all_rows = (await session.execute(stmt)).all()
 
@@ -229,11 +229,12 @@ async def cb_dist_set_city(callback: CallbackQuery):
     active_filter = parts[2] if len(parts) > 2 else "all"
 
     async with async_session_factory() as session:
+        user = await UserService.get_user_by_telegram_id(session, callback.from_user.id)
         profile = (
             await session.execute(
-                select(SeekerProfile).where(SeekerProfile.user_id == callback.from_user.id)
+                select(SeekerProfile).where(SeekerProfile.user_id == user.id)
             )
-        ).scalar_one_or_none()
+        ).scalar_one_or_none() if user else None
         if profile:
             profile.city = city
             await session.commit()
@@ -290,7 +291,7 @@ async def cb_dist_pick(callback: CallbackQuery):
         stmt = (
             select(SeekerProfile, User)
             .join(User, SeekerProfile.user_id == User.id)
-            .where(SeekerProfile.is_active == True, User.id != user.id)
+            .where(SeekerProfile.is_active == True, User.is_blocked == False, User.id != user.id)
         )
         all_rows = (await session.execute(stmt)).all()
 
@@ -365,21 +366,9 @@ async def cb_dist_pick(callback: CallbackQuery):
     PAGE_SIZE = 4
     page_seekers = seekers_in_dist[offset:offset + PAGE_SIZE]
 
-    btn_chat_label = "💬 Сөйлесу" if lang == "kz" else "💬 Написать"
-
     for sp, u in page_seekers:
         card_text = format_candidate_card(sp, u, user, my_prof, lang, my_criteria, show_reason=False)
-        chat_url = get_chat_url(u)
-        person_kb = InlineKeyboardMarkup(
-            inline_keyboard=[[
-                InlineKeyboardButton(text=btn_chat_label, url=chat_url)
-            ]]
-        )
-        await callback.message.answer(
-            card_text,
-            reply_markup=person_kb,
-            parse_mode="Markdown",
-        )
+        await send_card(callback.message.answer, card_text, reply_markup=person_keyboard(u, lang))
 
     # Footer navigation controls
     control_buttons = []
@@ -415,7 +404,7 @@ async def cb_dist_pick(callback: CallbackQuery):
         if lang == "kz"
         else
         f"🏁 **{dist_name}**: показано {shown_count} из {len(seekers_in_dist)} чел."
-    )
+    ) + "\n\n" + safety_tip(lang)
 
     await callback.message.answer(
         footer_text,

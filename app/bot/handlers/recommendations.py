@@ -17,14 +17,16 @@ from sqlalchemy import select
 
 from app.ai.factory import get_ai_provider
 from app.bot.keyboards.reply import MENU_SEARCH_KZ, MENU_SEARCH_RU
-from app.bot.notifications import get_chat_url
-from app.constants import ADJACENT_DISTRICTS, DEFAULT_CITY, LISTING_STATUS_ACTIVE
+from app.bot.cards import md_safe, person_keyboard, safety_tip, send_card
+from app.bot.notifications import SEED_CHAT_CALLBACK
+from app.constants import DEFAULT_CITY, LISTING_STATUS_ACTIVE
 from app.db.base import async_session_factory
 from app.db.models import Listing, SeekerProfile, User
 from app.i18n import get_district_name
-from app.matching.cold_search import ColdCandidate, perform_cold_search
+from app.matching.cold_search import ColdCandidate, adjacent_districts, perform_cold_search
 from app.matching.reason_generator import generate_human_match_reason
 from app.services.candidate_event_service import KIND_SHOWN, CandidateEventService
+from app.services.funnel_service import EVENT_SEARCH_EMPTY, EVENT_SEARCH_SHOWN, track, track_now
 from app.services.user_service import UserService
 
 router = Router(name="recommendations_router")
@@ -42,10 +44,10 @@ def format_card_for_apartment_owner(
     """
     c_gender = sp.gender or u.gender or "male"
     emoji = "👩" if c_gender == "female" else "👨"
-    name = sp.name or u.first_name or ("Көрші" if lang == "kz" else "Сосед")
+    name = md_safe(sp.name or u.first_name) or ("Көрші" if lang == "kz" else "Сосед")
     age = sp.age or u.age or 22
-    district = sp.districts[0] if sp.districts else "Бостандыкский"
-    dist_name = get_district_name(district, lang)
+    cand_districts = sp.districts or ["Бостандыкский"]
+    dist_name = ", ".join(get_district_name(d, lang) for d in cand_districts)
     budget = sp.budget_range or (f"{sp.budget_max:,} ₸" if sp.budget_max else ("Келісімді" if lang == "kz" else "По договорённости"))
     move_date = sp.move_in_date or ("Жақын арада" if lang == "kz" else "В ближайшее время")
 
@@ -54,7 +56,7 @@ def format_card_for_apartment_owner(
         occ_label = "Студент 🎓" if occ in ("student", "учусь") else ("Жұмыс істейді 💼" if occ in ("working", "работает") else "Жұмыс істейді және оқиды 💼🎓")
         reason_block = ""
         if show_reason:
-            reason_text = custom_reason or "Сенің ауданыңнан іздеп жүр, бюджеті келеді және шамамен осы уақытта көше алады."
+            reason_text = md_safe(custom_reason) or "Сенің ауданыңнан іздеп жүр, бюджеті келеді және шамамен осы уақытта көше алады."
             reason_block = f"\n\n💡 **Неге сәйкес келеді:**\n{reason_text}"
         return (
             f"{emoji} **{name}**, {age} жаста\n"
@@ -69,11 +71,11 @@ def format_card_for_apartment_owner(
         occ_label = "Студент 🎓" if occ in ("student", "учусь") else ("Работает 💼" if occ in ("working", "работает") else "Работает и учится 💼🎓")
         reason_block = ""
         if show_reason:
-            reason_text = custom_reason or "Ищет твой район, подходит по бюджету и может заехать примерно в это время."
+            reason_text = md_safe(custom_reason) or "Ищет твой район, подходит по бюджету и может заехать примерно в это время."
             reason_block = f"\n\n💡 **Почему подходит тебе:**\n{reason_text}"
         return (
             f"{emoji} **{name}**, {age} лет\n"
-            f"📍 Ищет в: **{dist_name} районе**\n"
+            f"📍 Ищет в: **{dist_name} {'районе' if len(cand_districts) == 1 else 'районах'}**\n"
             f"🔎 **Квартиру пока не нашёл**\n\n"
             f"💰 Бюджет: **{budget}**\n"
             f"📅 Когда хочет заехать: **{move_date}**\n"
@@ -94,7 +96,7 @@ def format_card_for_ready_apartment(
     """
     c_gender = sp.gender or u.gender or "male"
     emoji = "👩" if c_gender == "female" else "👨"
-    name = sp.name or u.first_name or ("Көрші" if lang == "kz" else "Сосед")
+    name = md_safe(sp.name or u.first_name) or ("Көрші" if lang == "kz" else "Сосед")
     age = sp.age or u.age or 22
     district = sp.districts[0] if sp.districts else "Бостандыкский"
     dist_name = get_district_name(district, lang)
@@ -102,13 +104,13 @@ def format_card_for_ready_apartment(
 
     if lang == "kz":
         rtype_label = "Жеке бөлме 🛏" if sp.room_type == "separate" else "Ортақ бөлме (бір бөлмеде) 👥"
-        address_str = sp.apartment_address or dist_name
+        address_str = md_safe(sp.apartment_address) or dist_name
         budget = sp.budget_range or (f"{sp.budget_max:,} ₸" if sp.budget_max else "Келісімді")
         move_date = sp.move_in_date or "Жақын арада"
         need_cnt = sp.neighbors_needed or 1
         reason_block = ""
         if show_reason:
-            reason_text = custom_reason or "Сол аудан, сәйкес бюджет және саған арналған жайлы бөлме."
+            reason_text = md_safe(custom_reason) or "Сол аудан, сәйкес бюджет және саған арналған жайлы бөлме."
             reason_block = f"\n\n💡 **Неге сәйкес келеді:**\n{reason_text}"
 
         return (
@@ -125,13 +127,13 @@ def format_card_for_ready_apartment(
         )
     else:
         rtype_label = "Отдельная комната 🛏" if sp.room_type == "separate" else "Общая комната (вместе) 👥"
-        address_str = sp.apartment_address or dist_name
+        address_str = md_safe(sp.apartment_address) or dist_name
         budget = sp.budget_range or (f"{sp.budget_max:,} ₸" if sp.budget_max else "По договорённости")
         move_date = sp.move_in_date or "В ближайшее время"
         need_cnt = sp.neighbors_needed or 1
         reason_block = ""
         if show_reason:
-            reason_text = custom_reason or "Тот же район, подходящий бюджет и отдельная комната для тебя."
+            reason_text = md_safe(custom_reason) or "Тот же район, подходящий бюджет и отдельная комната для тебя."
             reason_block = f"\n\n💡 **Почему подходит тебе:**\n{reason_text}"
 
         return (
@@ -160,10 +162,10 @@ def format_card_for_coseeker(
     """
     c_gender = sp.gender or u.gender or "male"
     emoji = "👩" if c_gender == "female" else "👨"
-    name = sp.name or u.first_name or ("Көрші" if lang == "kz" else "Сосед")
+    name = md_safe(sp.name or u.first_name) or ("Көрші" if lang == "kz" else "Сосед")
     age = sp.age or u.age or 22
-    district = sp.districts[0] if sp.districts else "Бостандыкский"
-    dist_name = get_district_name(district, lang)
+    cand_districts = sp.districts or ["Бостандыкский"]
+    dist_name = ", ".join(get_district_name(d, lang) for d in cand_districts)
     budget = sp.budget_range or (f"{sp.budget_max:,} ₸" if sp.budget_max else ("Келісімді" if lang == "kz" else "По договорённости"))
     move_date = sp.move_in_date or ("Жақын арада" if lang == "kz" else "В ближайшее время")
 
@@ -172,7 +174,7 @@ def format_card_for_coseeker(
         occ_label = "Студент 🎓" if occ in ("student", "учусь") else ("Жұмыс істейді 💼" if occ in ("working", "работает") else "Жұмыс істейді және оқиды 💼🎓")
         reason_block = ""
         if show_reason:
-            reason_text = custom_reason or "Бір аудан және ұқсас бюджет — бірге пәтер іздесеңдер болады."
+            reason_text = md_safe(custom_reason) or "Бір аудан және ұқсас бюджет — бірге пәтер іздесеңдер болады."
             reason_block = f"\n\n💡 **Неге сәйкес келеді:**\n{reason_text}"
         return (
             f"{emoji} **{name}**, {age} жаста\n"
@@ -187,7 +189,7 @@ def format_card_for_coseeker(
         occ_label = "Студент 🎓" if occ in ("student", "учусь") else ("Работает 💼" if occ in ("working", "работает") else "Работает и учится 💼🎓")
         reason_block = ""
         if show_reason:
-            reason_text = custom_reason or "Одинаковый район и похожий бюджет — можете вместе поискать квартиру."
+            reason_text = md_safe(custom_reason) or "Одинаковый район и похожий бюджет — можете вместе поискать квартиру."
             reason_block = f"\n\n💡 **Почему подходит тебе:**\n{reason_text}"
         return (
             f"{emoji} **{name}**, {age} лет\n"
@@ -248,9 +250,17 @@ async def show_instant_recommendations(
         ).scalar_one_or_none()
 
         my_city = (my_prof.city if my_prof and my_prof.city else getattr(user, "city", None)) or DEFAULT_CITY
-        my_districts = (my_prof.districts if my_prof and my_prof.districts else [])
-        my_district = district_filter or (my_districts[0] if my_districts else "Бостандыкский")
-        dist_name = get_district_name(my_district, lang)
+        my_districts = (my_prof.districts if my_prof and my_prof.districts else ["Бостандыкский"])
+        target_districts = [district_filter] if district_filter else list(my_districts)
+        # "*" in callback data = "the user's own districts"
+        scope = district_filter or "*"
+        dist_names = [get_district_name(d, lang) for d in target_districts]
+        dist_name = ", ".join(dist_names)
+        if lang == "kz":
+            area_text = f"{dist_name} ауданында" if len(dist_names) == 1 else f"{dist_name} аудандарында"
+        else:
+            area_text = f"В {dist_name} районе" if len(dist_names) == 1 else f"В районах {dist_name}"
+        has_adjacent = bool(adjacent_districts(target_districts))
         user_pref_gender = getattr(user, "preferred_gender", None) or (my_prof.preferred_gender if my_prof else None) or "any"
 
         # Owner's criteria if any
@@ -271,7 +281,7 @@ async def show_instant_recommendations(
             session=session,
             viewer_user=user,
             viewer_profile=my_prof,
-            district_filter=my_district,
+            district_filter=district_filter,
             allow_adjacent=show_adjacent,
         )
 
@@ -297,8 +307,6 @@ async def show_instant_recommendations(
             needed = 6 - len(primary_cands)
             pool = primary_cands + secondary_cands[:needed]
 
-    btn_chat_label = "💬 Сөйлесу" if lang == "kz" else "💬 Написать"
-
     # Everyone matching was already shown earlier
     if not pool and found_total > 0:
         seen_text = (
@@ -309,7 +317,7 @@ async def show_instant_recommendations(
             "👀 **Ты уже посмотрел всех подходящих людей.**\n\n"
             "Когда появится кто-то новый, я сообщу. Показать список заново?"
         )
-        reset_cb = f"rec_reset:{my_district}:{1 if show_adjacent else 0}"
+        reset_cb = f"rec_reset:{scope}:{1 if show_adjacent else 0}"
         btns = [
             [InlineKeyboardButton(text="🔁 Қайта көрсету" if lang == "kz" else "🔁 Показать заново", callback_data=reset_cb)],
             [
@@ -319,11 +327,11 @@ async def show_instant_recommendations(
                 )
             ],
         ]
-        if ADJACENT_DISTRICTS.get(my_district) and not show_adjacent:
+        if has_adjacent and not show_adjacent:
             btns.append([
                 InlineKeyboardButton(
                     text="🏘 Көршілес аудандарды көрсету" if lang == "kz" else "🏘 Показать соседние районы",
-                    callback_data=f"rec_adjacent:{my_district}",
+                    callback_data=f"rec_adjacent:{scope}",
                 )
             ])
         btns.append([
@@ -337,6 +345,7 @@ async def show_instant_recommendations(
 
     # Zero candidates fallback
     if not pool:
+        await track_now(user.telegram_id, EVENT_SEARCH_EMPTY)
         if show_adjacent:
             no_text = (
                 "🔍 **Көршілес аудандарда да әзірге кандидаттар жоқ.**\n\n"
@@ -364,14 +373,14 @@ async def show_instant_recommendations(
             )
         else:
             no_text = (
-                f"🔍 **{dist_name} ауданында әзірге саған сәйкес келетін адамдар табылмады.**\n\n"
+                f"🔍 **{area_text} әзірге саған сәйкес келетін адамдар табылмады.**\n\n"
                 "Бірақ жаңа адам тіркелгенде мен саған бірден хабарлаймын! Көршілес аудандарды немесе басқа аудандарды қарап көре аласың 👇"
                 if lang == "kz"
                 else
-                f"🔍 **В {dist_name} районе пока не нашлось подходящих людей.**\n\n"
+                f"🔍 **{area_text} пока не нашлось подходящих людей.**\n\n"
                 "Но как только появится подходящий человек, я сразу сообщу! Можешь посмотреть соседние районы или выбрать другой 👇"
             )
-            adj_districts = ADJACENT_DISTRICTS.get(my_district, [])
+            adj_districts = has_adjacent
             btns = [
                 [
                     InlineKeyboardButton(
@@ -384,7 +393,7 @@ async def show_instant_recommendations(
                 btns.append([
                     InlineKeyboardButton(
                         text="🏘 Көршілес аудандарды көрсету" if lang == "kz" else "🏘 Показать соседние районы",
-                        callback_data=f"rec_adjacent:{my_district}",
+                        callback_data=f"rec_adjacent:{scope}",
                     )
                 ])
             btns.append([
@@ -406,7 +415,7 @@ async def show_instant_recommendations(
         "gender": (my_prof.gender if my_prof else None) or user.gender or "not_specified",
         "preferred_gender": user_pref_gender,
         "city": my_city,
-        "target_district": my_district,
+        "target_district": dist_name,
         "has_apartment": has_apt,
         "budget": (my_prof.budget_max if my_prof and my_prof.budget_max else 120000),
         "budget_range": (my_prof.budget_range if my_prof else None),
@@ -462,6 +471,7 @@ async def show_instant_recommendations(
     shown_cards = ranked_cards_data[:5]
     async with async_session_factory() as session:
         await CandidateEventService.record(session, user.id, [c.user.id for c, _ in shown_cards], KIND_SHOWN)
+        await track(session, user.telegram_id, EVENT_SEARCH_SHOWN)
         await session.commit()
 
     for cand, reason in shown_cards:
@@ -474,14 +484,10 @@ async def show_instant_recommendations(
             criteria=my_criteria,
             custom_reason=reason,
         )
-        chat_url = get_chat_url(cand.user)
-        kb = InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text=btn_chat_label, url=chat_url)]]
-        )
-        await send_msg(card_text, reply_markup=kb, parse_mode="Markdown")
+        await send_card(send_msg, card_text, reply_markup=person_keyboard(cand.user, lang))
 
     # Footer navigation
-    adj_districts = ADJACENT_DISTRICTS.get(my_district, [])
+    adj_districts = has_adjacent
     footer_buttons = [
         [
             InlineKeyboardButton(
@@ -494,7 +500,7 @@ async def show_instant_recommendations(
         footer_buttons.append([
             InlineKeyboardButton(
                 text="🏘 Көршілес аудандарды көрсету" if lang == "kz" else "🏘 Показать соседние районы",
-                callback_data=f"rec_adjacent:{my_district}",
+                callback_data=f"rec_adjacent:{scope}",
             )
         ])
     footer_buttons.append([
@@ -508,7 +514,7 @@ async def show_instant_recommendations(
         if lang == "kz"
         else
         "✨ Нажимай **«Написать»** у понравившегося соседа и сразу пиши ему в Telegram! 💬"
-    )
+    ) + "\n\n" + safety_tip(lang)
     await send_msg(
         footer_text,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=footer_buttons),
@@ -546,8 +552,25 @@ async def cb_rec_refresh(callback: CallbackQuery):
 async def cb_rec_adjacent(callback: CallbackQuery):
     """Show adjacent districts recommendations."""
     await callback.answer()
-    district = callback.data.split(":")[1]
-    await show_instant_recommendations(callback, callback.from_user.id, district_filter=district, show_adjacent=True)
+    district = callback.data.split(":", 1)[1]
+    await show_instant_recommendations(
+        callback,
+        callback.from_user.id,
+        district_filter=None if district == "*" else district,
+        show_adjacent=True,
+    )
+
+
+@router.callback_query(F.data == SEED_CHAT_CALLBACK)
+async def cb_seed_chat(callback: CallbackQuery):
+    """«Написать» on a fake seed profile."""
+    async with async_session_factory() as session:
+        lang = await UserService.get_user_language(session, callback.from_user.id)
+    await callback.answer(
+        "🧪 Бұл тест-профиль (сид), оған жазу мүмкін емес." if lang == "kz"
+        else "🧪 Это тестовый профиль (сид), написать ему нельзя.",
+        show_alert=True,
+    )
 
 
 @router.callback_query(F.data.startswith("rec_reset:"))
@@ -563,7 +586,7 @@ async def cb_rec_reset(callback: CallbackQuery):
     await show_instant_recommendations(
         callback,
         callback.from_user.id,
-        district_filter=district,
+        district_filter=None if district == "*" else district,
         show_adjacent=adjacent == "1",
     )
 

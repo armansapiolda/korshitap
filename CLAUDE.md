@@ -7,10 +7,10 @@
 ## 🛠 Стек технологий
 - **Язык**: Python 3.9+
 - **Telegram Bot Framework**: aiogram 3.x (Async, FSM, Router)
-- **База данных**: SQLite + aiosqlite, SQLAlchemy 2.0 (Async ORM)
+- **База данных**: SQLite (aiosqlite) по умолчанию или Postgres (asyncpg) через `DATABASE_URL`; SQLAlchemy 2.0 (Async ORM); схема — миграции Alembic (`migrations/`)
 - **ИИ-провайдер**: Google GenAI SDK (`google-genai`), модель `gemini-2.5-flash` через Google Cloud Vertex AI (проект `korshi-tap`, локация `us-central1`, ключ `vertex_key.json`). Резерв: `MockAIProvider`.
 - **Веб-панель / Admin**: FastAPI + Jinja2 + Tailwind CSS (`http://127.0.0.1:8000/admin`)
-- **Тесты**: Pytest + pytest-asyncio (32 автоматических теста, изолированная временная БД и `AI_PROVIDER=mock` задаются в `tests/conftest.py`)
+- **Тесты**: Pytest + pytest-asyncio (41 тест + 1 для Postgres; изолированная временная БД и `AI_PROVIDER=mock` задаются в `tests/conftest.py`)
 
 ---
 
@@ -24,14 +24,16 @@ KORSHI TAP/
 │   │   ├── factory.py              # Фабрика провайдеров (get_ai_provider)
 │   │   ├── gemini_provider.py      # Реализация Vertex AI (Gemini 2.5 Flash, асинхронный клиент, thinking_budget=0)
 │   │   └── mock_provider.py        # Детерминированный офлайн-ранжировщик (fallback)
-│   ├── admin/                      # FastAPI админ-панель (HTTP Basic логин; /map публичная для Telegram WebApp)
+│   ├── admin/                      # FastAPI админ-панель (HTTP Basic логин на всё, включая /map): воронка, сиды, жалобы
 │   ├── bot/
-│   │   ├── bot.py                  # Инициализация бота, диспетчера и роутеров
+│   │   ├── bot.py                  # Бот, роутеры (меню раньше анкеты), middleware: блокировка, воронка
+│   │   ├── cards.py                # Безопасная отправка карточек: md_safe, кнопки «Написать»/«Жалоба», предупреждение
 │   │   ├── handlers/
-│   │   │   ├── start.py            # Анкета /start (ветвление: есть квартира / ищу квартиру)
+│   │   │   ├── start.py            # Анкета /start + режим правки одного поля (finish_single_edit)
+│   │   │   ├── reports.py          # Жалобы на людей (KZ/RU)
 │   │   │   ├── recommendations.py  # 2-этапный поиск: Холодный фильтр + AI-ранжирование
 │   │   │   ├── district_search.py  # Просмотр кандидатов по районам (без ИИ-блоков)
-│   │   │   ├── profile.py          # Профиль: редактирование, уведомления, «нашёл соседа — скрыть анкету»
+│   │   │   ├── profile.py          # Профиль: «что изменить?», уведомления, «нашёл соседа — скрыть анкету»
 │   │   │   ├── freshness.py        # Напоминания «ещё ищешь?» и автоскрытие брошенных анкет (фоновый цикл)
 │   │   │   └── swipe.py, who_is_looking.py, matches.py, owner_flow.py, seeker_flow.py
 │   │   │                           # Старый Tinder-слой (лайки/матчи). В главном меню кнопок нет.
@@ -39,19 +41,20 @@ KORSHI TAP/
 │   │   ├── keyboards/              # Клавиатуры (Reply & Inline)
 │   │   └── states.py               # FSM-состояния анкеты
 │   ├── db/
-│   │   ├── base.py                 # Async engine, sessionmaker, миграции init_db()
-│   │   └── models.py               # Модели: User, SeekerProfile, Listing, Like, Match, CandidateEvent
+│   │   ├── base.py                 # Async engine, sessionmaker; init_db() = alembic upgrade head
+│   │   └── models.py               # User (is_seed), SeekerProfile, Listing, CandidateEvent, FunnelEvent, Report (+ старые Like, Match)
 │   ├── matching/
 │   │   ├── cold_search.py          # ЭТАП 1: Холодный фактологический поиск (evaluate_candidate)
 │   │   ├── dates.py                # Разбор дат заезда («с 10 сентября», «Бір ай ішінде») в окна дней
 │   │   ├── engine.py, scoring.py, weights.py, filters.py  # Старый движок свайпов (веса из админки)
 │   │   └── reason_generator.py     # Вспомогательные генераторы текста
 │   ├── seeds/
-│   │   └── test_data.py            # Генератор 500 реалистичных пользователей (KZ/RU)
-│   ├── services/                   # Сервисы: UserService, ListingService, MatchService
+│   │   └── test_data.py            # Сиды: фейковые анкеты (is_seed, отрицательные telegram_id) и их удаление
+│   ├── services/                   # UserService, ListingService, CandidateEventService, FunnelService, ReportService
 │   ├── config.py                   # Pydantic Settings
 │   └── constants.py                # Районы Алматы, Астаны, Шымкента, смежные районы
-├── tests/                          # 32 теста (test_search_filters.py, test_ai_ranking.py и др.)
+├── migrations/                     # Alembic: 0001_baseline (старая схема), 0002_… (сиды, события, свежесть)
+├── tests/                          # test_bot_flow.py (сквозные сценарии бота), test_search_filters.py, test_safety.py и др.
 ├── run_bot.py                      # Запуск Telegram-бота
 ├── run_admin.py                    # Запуск веб-админки
 ├── CLAUDE.md                       # Этот файл документации
@@ -87,13 +90,30 @@ KORSHI TAP/
    - В конфиг всегда передаётся `thinking_config=types.ThinkingConfig(thinking_budget=0)` — это исключает 40-секундную задержку рассуждений Gemini 2.5 Flash и ускоряет ответ до **1.5–2 секунд**.
    - Установлен таймаут `asyncio.wait_for(..., timeout=7.0)` с автоматическим переходом на `mock_fallback`.
 
-4. **Анкета и объявление**: при сохранении анкеты `ListingService.sync_profile_listing` держит ровно одно активное объявление у владельца квартиры и архивирует объявления, если квартиры нет (без дублей при редактировании). Тексты «идеальный сосед» и «о себе» проходят `moderate_content`.
+4. **Анкета**:
+   - Порядок: язык → город → имя → пол → возраст → занятость → **есть ли квартира** → район → какого соседа → детали жилья → бюджет → дата → идеальный сосед → о себе.
+   - Владелец квартиры выбирает 1 район (где квартира), ищущий — до 3 районов; поиск и уведомления учитывают все выбранные районы.
+   - «✏️ Изменить анкету» в профиле: можно поменять одно поле (район, какого соседа, бюджет, дата, идеальный сосед, о себе) — `edit_field` в FSM, сохранение в `finish_single_edit`. Есть и «Заполнить всё заново».
+   - Кнопки главного меню работают посреди анкеты (их роутеры подключены раньше `start`).
 
-5. **Уведомления и свежесть**:
+5. **Анкета и объявление**: при сохранении анкеты `ListingService.sync_profile_listing` держит ровно одно активное объявление у владельца квартиры и архивирует объявления, если квартиры нет (без дублей при редактировании). Тексты «идеальный сосед» и «о себе» проходят `moderate_content`.
+
+6. **Уведомления и свежесть**:
    - После сохранения анкеты в фоне запускается `alert_users_about_new_profile`: людям с включёнными уведомлениями, которым новый человек проходит холодный поиск, приходит его карточка (не более 20, каждому — один раз).
    - Анкета без обновлений `LISTING_FRESHNESS_DAYS` дней получает «ещё ищешь?»; без ответа ещё столько же — скрывается. Заблокировавшие бота скрываются сразу.
 
-6. **Поиск по районам ([`app/bot/handlers/district_search.py`](file:///app/bot/handlers/district_search.py))**:
+7. **Безопасность в боте**:
+   - Карточки отправляются через `cards.send_card`: пользовательский текст чистится `md_safe`, при ошибке Markdown карточка уходит обычным текстом и не обрывает ленту.
+   - Под каждой карточкой — «Написать» и «🚩 Жалоба»; под лентой — предупреждение не переводить предоплату.
+   - Заблокированный в админке (`is_blocked`) не может пользоваться ботом (`BlockedUserMiddleware`).
+
+8. **Сиды (тестовые фейковые анкеты)**:
+   - Добавляются/удаляются на `/admin/seed` или `python -m app.seeds.test_data`. `User.is_seed=True`, `telegram_id` отрицательный (никогда не совпадёт с реальным), `username` пустой.
+   - «Удалить сиды» удаляет **только** сиды и всё, что к ним относится. Реальные пользователи не трогаются.
+   - Кнопка «Написать» у сида — «🧪 Тестовый профиль» (ничего не открывает). Сидам не шлются уведомления и напоминания, в воронке они не считаются.
+   - `run_all.py` сам засевает пустую базу только при `SEED_DEMO_DATA_ON_START=true`.
+
+9. **Поиск по районам ([`app/bot/handlers/district_search.py`](file:///app/bot/handlers/district_search.py))**:
    - Работает напрямую из БД.
    - Передаётся `show_reason=False` — блок ИИ-совместимости (`💡 Неге сәйкес келеді:`) там намеренно **не выводится**.
 
@@ -102,8 +122,12 @@ KORSHI TAP/
 ## 🚀 Команды для работы
 
 ```bash
-# Запуск тестов (все 32 теста должны проходить)
+# Запуск тестов (все должны проходить; тест Postgres пропускается без TEST_POSTGRES_URL)
 .venv/bin/pytest -v
+TEST_POSTGRES_URL=postgresql+asyncpg://user:pass@localhost:5432/korshi_test .venv/bin/pytest tests/test_postgres.py
+
+# Миграции применяются сами при старте (init_db). После изменения app/db/models.py:
+.venv/bin/alembic revision --autogenerate -m "что изменилось"
 
 # Запуск Telegram-бота
 .venv/bin/python run_bot.py
@@ -111,15 +135,16 @@ KORSHI TAP/
 # Запуск панели администратора
 .venv/bin/python run_admin.py
 
-# Засеять 500 реалистичных пользователей (Алматы, Астана, Шымкент)
+# Добавить 500 сидов (фейковых анкет) — то же, что кнопка на /admin/seed
 .venv/bin/python -m app.seeds.test_data --count 500
 
-# Очистить тестовые данные
-.venv/bin/python -m app.seeds.test_data --wipe
+# Удалить все сиды (реальные пользователи остаются)
+.venv/bin/python -m app.seeds.test_data --wipe-only
 ```
 
 ---
 
 ## 🔒 Безопасность
 - Файл `vertex_key.json` (Google Cloud Service Account) и `korshi_tap.db` защищены в `.gitignore` и **никогда не должны попадать в публичные репозитории**.
-- Админка закрыта HTTP Basic (`ADMIN_USERNAME` / `ADMIN_PASSWORD` в `.env`). Если пароль не задан, при старте генерируется одноразовый и печатается в лог. Публичным остаётся только `/map` (Telegram WebApp) — она показывает имена и контакты активных анкет.
+- Админка закрыта HTTP Basic (`ADMIN_USERNAME` / `ADMIN_PASSWORD` в `.env`). Если пароль не задан, при старте генерируется одноразовый и печатается в лог. `/map` тоже под паролем: она показывает имена и контакты, а из бота не открывается. Если понадобится открыть её в Telegram как WebApp — сначала добавить проверку `initData`.
+- Для реального запуска лучше Postgres: `DATABASE_URL=postgresql+asyncpg://...`. Старые SQLite-базы, созданные до миграций, при первом старте дополняются недостающими колонками и помечаются `0001_baseline`; старые сиды (маленькие положительные telegram_id + is_verified) распознаются и помечаются `is_seed`.

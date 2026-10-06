@@ -13,11 +13,30 @@ from app.i18n import get_district_name
 logger = logging.getLogger(__name__)
 
 
+SEED_CHAT_CALLBACK = "seed_chat"
+
+
 def get_chat_url(user: User) -> str:
     """Generate direct Telegram chat URL for any account (with or without username)."""
+    if getattr(user, "is_seed", False):
+        # Seed profiles are fake: never link to a (possibly real) Telegram account
+        return "https://t.me"
     if user.username:
         return f"https://t.me/{user.username}"
     return f"tg://user?id={user.telegram_id}"
+
+
+def chat_button(user: User, lang: str = "kz") -> InlineKeyboardButton:
+    """«Написать» button: opens the chat, or explains that a seed profile is fake."""
+    if getattr(user, "is_seed", False):
+        return InlineKeyboardButton(
+            text="🧪 Тест-профиль" if lang == "kz" else "🧪 Тестовый профиль",
+            callback_data=SEED_CHAT_CALLBACK,
+        )
+    return InlineKeyboardButton(
+        text="💬 Сөйлесу" if lang == "kz" else "💬 Написать",
+        url=get_chat_url(user),
+    )
 
 
 async def notify_owner_about_applicant(
@@ -299,6 +318,7 @@ async def find_users_to_alert_about(
                 SeekerProfile.is_active == True,
                 SeekerProfile.notifications_enabled == True,
                 User.is_blocked == False,
+                User.is_seed == False,  # fake profiles have nobody to notify
                 User.id != new_user_id,
             )
             .order_by(SeekerProfile.updated_at.desc())
@@ -316,7 +336,7 @@ async def find_users_to_alert_about(
             new_user,
             new_prof,
             listings.get(new_user_id),
-            {prof.districts[0]},
+            set(prof.districts),
         )
         if result is None:
             continue
@@ -329,6 +349,7 @@ async def find_users_to_alert_about(
 async def alert_users_about_new_profile(bot: Bot, new_user_id: int) -> int:
     """Send "a new matching person appeared" cards. Returns number of messages sent."""
     import asyncio
+    from app.bot.cards import person_keyboard, safety_tip, send_card
     from app.bot.handlers.recommendations import format_candidate_card
     from app.db.base import async_session_factory
     from app.services.candidate_event_service import KIND_NOTIFIED, KIND_SHOWN, CandidateEventService
@@ -350,23 +371,12 @@ async def alert_users_about_new_profile(bot: Bot, new_user_id: int) -> int:
             "🆕 **Появился новый человек, который тебе подходит!**\n\n"
         )
         card = format_candidate_card(new_prof, new_user, viewer, viewer_prof, lang=lang, show_reason=False)
-        kb = InlineKeyboardMarkup(
-            inline_keyboard=[[
-                InlineKeyboardButton(
-                    text="💬 Сөйлесу" if lang == "kz" else "💬 Написать",
-                    url=get_chat_url(new_user),
-                )
-            ]]
-        )
-        try:
-            await bot.send_message(
-                chat_id=viewer.telegram_id,
-                text=header + card,
-                reply_markup=kb,
-                parse_mode="Markdown",
-            )
+        text = header + card + "\n\n" + safety_tip(lang)
+        if await send_card(
+            lambda t, **kw: bot.send_message(chat_id=viewer.telegram_id, text=t, **kw),
+            text,
+            reply_markup=person_keyboard(new_user, lang),
+        ):
             sent += 1
-        except Exception as e:
-            logger.info("Could not send new-profile alert to %s: %s", viewer.telegram_id, e)
         await asyncio.sleep(0.05)  # stay well below Telegram rate limits
     return sent

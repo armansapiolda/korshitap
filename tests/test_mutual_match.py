@@ -9,10 +9,10 @@ from app.services.match_service import MatchService
 @pytest.mark.asyncio
 async def test_mutual_like_creates_match(test_session):
     # 1. Seeker Arman
-    seeker = (await test_session.execute(select(User).where(User.telegram_id == 100001))).scalar_one()
+    seeker = (await test_session.execute(select(User).where(User.telegram_id == -100001))).scalar_one()
 
     # 2. Owner Alibek
-    owner = (await test_session.execute(select(User).where(User.telegram_id == 100009))).scalar_one()
+    owner = (await test_session.execute(select(User).where(User.telegram_id == -100009))).scalar_one()
 
     # 3. Listing of Alibek in Bostandyk
     listing = (await test_session.execute(

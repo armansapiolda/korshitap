@@ -10,7 +10,7 @@ from typing import List, Optional
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.constants import (
@@ -31,7 +31,7 @@ from app.constants import (
     SHYMKENT_DISTRICTS,
 )
 from app.db.base import async_session_factory, init_db
-from app.db.models import Like, Listing, Match, Report, SavedSearch, SeekerProfile, User
+from app.db.models import CandidateEvent, Like, Listing, Match, Report, SavedSearch, SeekerProfile, User
 
 
 MALE_NAMES = [
@@ -408,14 +408,16 @@ async def seed_database(session: AsyncSession, count: int = 500, city: str = "al
 
     # 1. Base curated users (Almaty)
     for udata in USERS_DATA:
-        stmt = select(User).where(User.telegram_id == udata["telegram_id"])
+        seed_tid = -udata["telegram_id"]  # negative: never a real Telegram user
+        stmt = select(User).where(User.telegram_id == seed_tid)
         res = await session.execute(stmt)
         user = res.scalar_one_or_none()
 
         if not user:
             user = User(
-                telegram_id=udata["telegram_id"],
-                username=udata["username"],
+                telegram_id=seed_tid,
+                username=None,  # a made-up username could belong to a real person
+                is_seed=True,
                 first_name=udata["first_name"],
                 age=udata.get("age"),
                 gender=udata.get("gender"),
@@ -497,9 +499,10 @@ async def seed_database(session: AsyncSession, count: int = 500, city: str = "al
     # 2. Dynamic generation for requested count
     target_additional = max(0, count - len(created_users))
     if target_additional > 0:
-        max_tid_res = await session.execute(select(func.max(User.telegram_id)))
-        max_tid = max_tid_res.scalar() or 200000
-        start_tid = max(200000, max_tid + 1)
+        # Seeds count down from -200000; real Telegram ids are always positive
+        min_tid_res = await session.execute(select(func.min(User.telegram_id)))
+        min_tid = min_tid_res.scalar()
+        start_tid = min(-200000, (min_tid or 0) - 1)
 
         cities_pool = ["Алматы", "Астана", "Шымкент"] if city == "all" else [city]
         occupations_pool = ["student", "working", "work_study"]
@@ -515,10 +518,9 @@ async def seed_database(session: AsyncSession, count: int = 500, city: str = "al
         pref_rooms_ru = ["🛏 Тек жеке бөлме", "👥 Общая комната (подселение)", "🤝 Всё равно"]
 
         for i in range(target_additional):
-            t_id = start_tid + i
+            t_id = start_tid - i
             u_gender = random.choice([GENDER_MALE, GENDER_FEMALE])
             first_name = random.choice(MALE_NAMES if u_gender == GENDER_MALE else FEMALE_NAMES)
-            username = f"{first_name.lower()}_{random.randint(100, 99999)}"
             u_age = random.randint(18, 34)
             u_lang = "kz" if random.random() < 0.65 else "ru"
             u_occ = random.choice(occupations_pool)
@@ -540,7 +542,8 @@ async def seed_database(session: AsyncSession, count: int = 500, city: str = "al
 
             new_user = User(
                 telegram_id=t_id,
-                username=username,
+                username=None,
+                is_seed=True,
                 first_name=first_name,
                 age=u_age,
                 gender=u_gender,
@@ -638,30 +641,63 @@ async def seed_database(session: AsyncSession, count: int = 500, city: str = "al
     }
 
 
-async def wipe_database(session: AsyncSession):
-    """Wipes test entities."""
-    await session.execute(delete(Like))
-    await session.execute(delete(Match))
-    await session.execute(delete(Report))
-    await session.execute(delete(SavedSearch))
-    await session.execute(delete(Listing))
-    await session.execute(delete(SeekerProfile))
-    await session.execute(delete(User))
+async def wipe_database(session: AsyncSession) -> int:
+    """Delete seed (fake) users and everything attached to them. Real users are kept.
+
+    Returns the number of deleted seed users.
+    """
+    seed_ids = select(User.id).where(User.is_seed == True).scalar_subquery()
+    seed_listing_ids = select(Listing.id).where(Listing.owner_id.in_(seed_ids)).scalar_subquery()
+    count = (await session.execute(select(func.count(User.id)).where(User.is_seed == True))).scalar_one()
+
+    await session.execute(delete(CandidateEvent).where(
+        or_(CandidateEvent.viewer_user_id.in_(seed_ids), CandidateEvent.candidate_user_id.in_(seed_ids))
+    ))
+    await session.execute(delete(Like).where(
+        or_(
+            Like.from_user_id.in_(seed_ids),
+            (Like.target_type == "seeker") & Like.target_id.in_(seed_ids),
+            (Like.target_type == "listing") & Like.target_id.in_(seed_listing_ids),
+        )
+    ))
+    await session.execute(delete(Match).where(
+        or_(Match.seeker_user_id.in_(seed_ids), Match.owner_user_id.in_(seed_ids), Match.listing_id.in_(seed_listing_ids))
+    ))
+    await session.execute(delete(Report).where(
+        or_(
+            Report.reporter_id.in_(seed_ids),
+            (Report.target_type == "user") & Report.target_id.in_(seed_ids),
+            (Report.target_type == "listing") & Report.target_id.in_(seed_listing_ids),
+        )
+    ))
+    await session.execute(delete(SavedSearch).where(SavedSearch.user_id.in_(seed_ids)))
+    await session.execute(delete(Listing).where(Listing.owner_id.in_(seed_ids)))
+    await session.execute(delete(SeekerProfile).where(SeekerProfile.user_id.in_(seed_ids)))
+    await session.execute(delete(User).where(User.is_seed == True))
     await session.commit()
+    return count
 
 
 async def main():
     parser = argparse.ArgumentParser(description="Seed test users and listings for Korshi Tap")
     parser.add_argument("--count", type=int, default=500, help="Total number of seeds to generate (default: 500)")
     parser.add_argument("--city", type=str, default="all", help="City filter: all, Алматы, Астана, Шымкент")
-    parser.add_argument("--wipe", action="store_true", help="Wipe database before generating seeds")
+    parser.add_argument("--wipe", action="store_true", help="Delete existing seeds before generating new ones")
+    parser.add_argument("--wipe-only", action="store_true", help="Only delete seeds, do not generate")
     args = parser.parse_args()
+
+    if args.wipe_only:
+        await init_db()
+        async with async_session_factory() as session:
+            deleted = await wipe_database(session)
+        print(f"🧹 Удалено сидов: {deleted}. Реальные пользователи не тронуты.")
+        return
 
     print(f"🌱 Инициализация базы данных и сидирование {args.count} тестовых данных (город: {args.city})...")
     await init_db()
     async with async_session_factory() as session:
         if args.wipe:
-            print("🧹 Очистка предыдущих тестовых данных...")
+            print("🧹 Очистка предыдущих тестовых данных (реальные пользователи не затрагиваются)...")
             await wipe_database(session)
         stats = await seed_database(session, count=args.count, city=args.city)
     print(f"✅ Успешно создано {stats['users_created']} пользователей и {stats['listings_created']} объявлений!")

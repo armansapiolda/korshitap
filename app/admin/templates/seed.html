@@ -3,7 +3,18 @@
 {% block content %}
 <div class="mb-6">
   <h1 class="text-2xl font-bold text-white">🧪 Тестовые данные для проверки на компьютере</h1>
-  <p class="text-gray-400 text-sm">Генерация реалистичных соискателей и объявлений по районам Алматы</p>
+  <p class="text-gray-400 text-sm">Фейковые анкеты, чтобы проверить поиск без реальных людей</p>
+</div>
+
+<div class="mb-6 grid grid-cols-2 gap-4">
+  <div class="bg-gray-800 border border-gray-700 rounded-xl p-4">
+    <div class="text-xs text-gray-400">Реальные пользователи</div>
+    <div class="text-2xl font-bold text-emerald-400">{{ real_count }}</div>
+  </div>
+  <div class="bg-gray-800 border border-gray-700 rounded-xl p-4">
+    <div class="text-xs text-gray-400">🧪 Сиды (тестовые)</div>
+    <div class="text-2xl font-bold text-indigo-400">{{ seed_count }}</div>
+  </div>
 </div>
 
 {% if message %}
@@ -18,6 +29,7 @@
     <h2 class="text-lg font-bold text-white mb-2">Генерация тестовых данных (Seed)</h2>
     <p class="text-sm text-gray-400 mb-4">
       Создаёт реалистичные анкеты и активные объявления с рандомными именами, возрастами, статусами жилья (с квартирой / без квартиры), районами, комнатами и бюджетами.
+      Сиды видны в поиске бота как обычные люди, но кнопка «Написать» у них показывает «🧪 Тестовый профиль» и никуда не ведёт.
     </p>
 
     <form method="POST" action="/admin/seed/populate" class="space-y-4">
@@ -53,14 +65,14 @@
 
   <div class="bg-gray-800 border border-gray-700 rounded-xl p-6 shadow">
     <div class="text-3xl mb-3">🧹</div>
-    <h2 class="text-lg font-bold text-white mb-2">Очистить базу данных</h2>
+    <h2 class="text-lg font-bold text-white mb-2">Удалить сиды</h2>
     <p class="text-sm text-gray-400 mb-6">
-      Удаляет все тестовые объявления, профили соискателей, свайпы и матчи.
-      Используйте для полного сброса перед тестированием чистых сценариев.
+      Удаляет только тестовые анкеты (🧪) и всё, что к ним относится: объявления, лайки, жалобы.
+      Реальные пользователи и их анкеты не затрагиваются.
     </p>
-    <form method="POST" action="/admin/seed/wipe" onsubmit="return confirm('Вы уверены, что хотите очистить все тестовые данные?');">
+    <form method="POST" action="/admin/seed/wipe" onsubmit="return confirm('Удалить все сиды ({{ seed_count }})? Реальные пользователи останутся.');">
       <button type="submit" class="w-full py-3 px-4 rounded-lg font-bold bg-rose-900 hover:bg-rose-800 text-rose-200 border border-rose-700 shadow transition">
-        ⚠️ Очистить тестовые данные
+        🧹 Удалить сиды
       </button>
     </form>
   </div>

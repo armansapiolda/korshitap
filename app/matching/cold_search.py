@@ -119,10 +119,29 @@ def budgets_compatible(
     return high <= low * COSEEKER_BUDGET_RATIO
 
 
-def allowed_districts_for(district: str, allow_adjacent: bool) -> Set[str]:
-    if allow_adjacent:
-        return set(ADJACENT_DISTRICTS.get(district, []))
-    return {district}
+def adjacent_districts(districts: Iterable[str]) -> Set[str]:
+    """Neighbouring districts of all given ones, excluding the given ones."""
+    own = set(districts)
+    adjacent: Set[str] = set()
+    for d in own:
+        adjacent.update(ADJACENT_DISTRICTS.get(d, []))
+    return adjacent - own
+
+
+def search_districts(
+    viewer_profile: Optional[SeekerProfile],
+    district_filter: Optional[str] = None,
+    allow_adjacent: bool = False,
+) -> Set[str]:
+    """Districts to search in: one picked district, or all of the viewer's districts.
+
+    With allow_adjacent, the neighbours of those districts (without the districts themselves).
+    """
+    if district_filter:
+        base = {district_filter}
+    else:
+        base = set(viewer_profile.districts) if viewer_profile and viewer_profile.districts else {"Бостандыкский"}
+    return adjacent_districts(base) if allow_adjacent else base
 
 
 def evaluate_candidate(
@@ -241,9 +260,7 @@ async def perform_cold_search(
       * primary_candidates: people searching for an apartment in that district.
       * secondary_candidates: empty list.
     """
-    my_districts = viewer_profile.districts if viewer_profile and viewer_profile.districts else []
-    my_district = district_filter or (my_districts[0] if my_districts else "Бостандыкский")
-    allowed_districts = allowed_districts_for(my_district, allow_adjacent)
+    allowed_districts = search_districts(viewer_profile, district_filter, allow_adjacent)
 
     # Fetch all active profiles excluding self and blocked users
     stmt = (

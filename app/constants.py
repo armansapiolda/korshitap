@@ -122,6 +122,15 @@ REPORT_REASON_LABELS = {
     REPORT_REASON_OTHER: "Другое",
 }
 
+REPORT_REASON_LABELS_KZ = {
+    REPORT_REASON_FRAUD: "Алаяқтық",
+    REPORT_REASON_OUTDATED: "Енді өзекті емес",
+    REPORT_REASON_WRONG_INFO: "Қате ақпарат",
+    REPORT_REASON_BROKER: "Делдал / Риелтор",
+    REPORT_REASON_SUSPICIOUS: "Күдікті адам",
+    REPORT_REASON_OTHER: "Басқа",
+}
+
 # Match statuses
 MATCH_STATUS_MATCHED = "matched"
 MATCH_STATUS_CONTACTED = "contacted"

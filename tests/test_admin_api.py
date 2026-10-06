@@ -46,6 +46,8 @@ async def test_admin_requires_login():
 
 
 @pytest.mark.asyncio
-async def test_map_is_public():
+async def test_map_requires_login():
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        assert (await client.get("/map")).status_code == 401
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", auth=ADMIN_AUTH) as client:
         assert (await client.get("/map")).status_code == 200

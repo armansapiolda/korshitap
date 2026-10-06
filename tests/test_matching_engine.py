@@ -60,7 +60,7 @@ async def test_get_next_listing_returns_bostandyk_first(test_session):
     from app.db.models import SeekerProfile, User
 
     # Find test user Arman (looking in Bostandyk)
-    stmt = select(User).where(User.telegram_id == 100001)
+    stmt = select(User).where(User.telegram_id == -100001)
     res = await test_session.execute(stmt)
     user = res.scalar_one()
 

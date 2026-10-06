@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     ADMIN_USERNAME: str = "admin"
     ADMIN_PASSWORD: Optional[str] = None
 
+    # Fill an empty database with fake test profiles (seeds) when run_all.py starts.
+    # Off by default: seeds can also be added/removed on the admin page /admin/seed.
+    SEED_DEMO_DATA_ON_START: bool = False
+
     # Freshness Check (days before prompt)
     LISTING_FRESHNESS_DAYS: int = 7
 

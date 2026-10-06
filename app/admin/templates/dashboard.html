@@ -11,7 +11,7 @@
   <div class="bg-gray-800 border border-gray-700 rounded-xl p-5">
     <div class="text-sm font-medium text-gray-400">Всего пользователей</div>
     <div class="text-3xl font-bold text-indigo-400 mt-2">{{ stats.users_count }}</div>
-    <div class="text-xs text-gray-500 mt-1">Соискатели и владельцы</div>
+    <div class="text-xs text-gray-500 mt-1">Реальные люди{% if stats.seed_count %} · ещё {{ stats.seed_count }} 🧪 сидов{% endif %}</div>
   </div>
 
   <div class="bg-gray-800 border border-gray-700 rounded-xl p-5">
@@ -27,15 +27,38 @@
   </div>
 
   <div class="bg-gray-800 border border-gray-700 rounded-xl p-5">
-    <div class="text-sm font-medium text-gray-400">Успешных MATCH</div>
-    <div class="text-3xl font-bold text-rose-400 mt-2">{{ stats.matches_count }}</div>
-    <div class="text-xs text-emerald-400 mt-1">Главная метрика сервиса</div>
+    <div class="text-sm font-medium text-gray-400">Анкет заполнено</div>
+    <div class="text-3xl font-bold text-rose-400 mt-2">{{ stats.profiles_completed }}</div>
+    <div class="text-xs text-emerald-400 mt-1">Увидели кандидатов: {{ stats.search_shown }}</div>
   </div>
 
   <div class="bg-gray-800 border border-gray-700 rounded-xl p-5">
     <div class="text-sm font-medium text-gray-400">Жалобы в очереди</div>
     <div class="text-3xl font-bold text-amber-400 mt-2">{{ stats.pending_reports }}</div>
     <div class="text-xs text-gray-500 mt-1">Требуют внимания</div>
+  </div>
+</div>
+
+<!-- Funnel -->
+<div class="bg-gray-800 border border-gray-700 rounded-xl p-6 mb-8">
+  <h2 class="text-xl font-bold text-white mb-1">🪜 Воронка анкеты</h2>
+  <p class="text-xs text-gray-500 mb-4">Сколько реальных людей дошли до каждого шага (сиды не считаются). «Ушли» — сколько отвалилось на предыдущем шаге.</p>
+  <div class="space-y-2">
+    {% for step in funnel.steps %}
+    <div class="flex items-center gap-3 text-sm">
+      <span class="w-56 text-gray-300 shrink-0">{{ step.label }}</span>
+      <div class="flex-1 bg-gray-700 rounded-full h-2">
+        <div class="bg-emerald-500 h-2 rounded-full" style="width: {{ step.pct_of_start }}%"></div>
+      </div>
+      <span class="w-12 text-right font-bold text-emerald-400">{{ step.count }}</span>
+      <span class="w-20 text-right text-xs {% if step.drop_from_prev > 0 %}text-rose-400{% else %}text-gray-600{% endif %}">
+        {% if step.drop_from_prev > 0 %}−{{ step.drop_from_prev }} ушли{% else %}—{% endif %}
+      </span>
+    </div>
+    {% endfor %}
+  </div>
+  <div class="mt-4 flex flex-wrap gap-4 text-xs text-gray-400">
+    {% for e in funnel.extras %}<span>{{ e.label }}: <b class="text-gray-200">{{ e.count }}</b></span>{% endfor %}
   </div>
 </div>
 
@@ -63,11 +86,11 @@
     <div class="space-y-4">
       <a href="/admin/seed" class="block p-4 rounded-lg bg-indigo-900/40 border border-indigo-700 hover:bg-indigo-900/60 transition">
         <div class="font-bold text-indigo-300">🌱 Тестовые данные</div>
-        <div class="text-sm text-gray-400 mt-1">Сгенерировать 20 пользователей и 25 реалистичных объявлений Алматы для быстрой проверки свайпов и матчей.</div>
+        <div class="text-sm text-gray-400 mt-1">Добавить или удалить фейковые анкеты (сиды), чтобы проверить поиск. Реальные пользователи не затрагиваются.</div>
       </a>
       <a href="/admin/weights" class="block p-4 rounded-lg bg-gray-750 border border-gray-700 hover:bg-gray-700 transition">
         <div class="font-bold text-white">⚙️ Настройка формулы AI-матчинга</div>
-        <div class="text-sm text-gray-400 mt-1">Изменить веса: Район (35%), Бюджет (20%), Даты (15%) и др. без перезагрузки сервера.</div>
+        <div class="text-sm text-gray-400 mt-1">Влияет только на старый режим свайпов. Основной поиск (кнопка «Поиск» в боте) эти веса не использует.</div>
       </a>
       <a href="/admin/reports" class="block p-4 rounded-lg bg-gray-750 border border-gray-700 hover:bg-gray-700 transition">
         <div class="font-bold text-amber-300">🚩 Модерация и жалобы</div>

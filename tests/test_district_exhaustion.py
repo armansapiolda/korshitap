@@ -13,7 +13,7 @@ from app.services.match_service import MatchService
 @pytest.mark.asyncio
 async def test_district_exhaustion_and_expansion_scenario(test_session):
     # 1. Fetch Seeker looking in Bostandyk
-    stmt = select(User).where(User.telegram_id == 100001)
+    stmt = select(User).where(User.telegram_id == -100001)  # seeds use negative telegram ids
     res = await test_session.execute(stmt)
     user = res.scalar_one()
 

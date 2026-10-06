@@ -14,6 +14,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
+from sqlalchemy import false
 from sqlalchemy.orm import relationship
 
 from app.constants import (
@@ -46,6 +47,9 @@ class User(Base):
     is_verified = Column(Boolean, default=False)
     is_phone_verified = Column(Boolean, default=False)
     is_blocked = Column(Boolean, default=False)
+    # Fake test profile created by app/seeds/test_data.py (admin "Сиды" page).
+    # Seeds have negative telegram_id, so they can never clash with real Telegram users.
+    is_seed = Column(Boolean, default=False, server_default=false(), nullable=False, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -212,6 +216,17 @@ class CandidateEvent(Base):
     viewer_user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     candidate_user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     kind = Column(String(20), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class FunnelEvent(Base):
+    """First time a user reached a step (questionnaire step, search shown, ...). One row per user+step."""
+    __tablename__ = "funnel_events"
+    __table_args__ = (UniqueConstraint("telegram_id", "name", name="uq_funnel_event"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    telegram_id = Column(BigInteger, nullable=False, index=True)
+    name = Column(String(64), nullable=False, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 

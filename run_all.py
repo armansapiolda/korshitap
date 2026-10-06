@@ -36,9 +36,11 @@ async def ensure_db_ready():
         from sqlalchemy import func, select
         from app.db.models import Listing
         cnt = (await session.execute(select(func.count(Listing.id)))).scalar_one()
-        if cnt == 0:
-            logger.info("Database is empty. Populating with initial test data...")
+        if cnt == 0 and settings.SEED_DEMO_DATA_ON_START:
+            logger.info("Database is empty. Populating with seed (fake) test data...")
             await seed_database(session)
+        elif cnt == 0:
+            logger.info("Database is empty. Add test seeds on the admin page: /admin/seed")
 
 
 if __name__ == "__main__":

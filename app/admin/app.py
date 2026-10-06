@@ -14,12 +14,14 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.bot.notifications import get_chat_url
 from app.config import settings
 from app.constants import ALMATY_DISTRICTS, LISTING_STATUS_ACTIVE
 from app.db.base import get_db, init_db
 from app.db.models import Listing, Match, Report, Setting, User
 from app.matching.weights import DEFAULT_WEIGHTS, MatchingWeights
 from app.seeds.test_data import seed_database, wipe_database
+from app.services.funnel_service import funnel_report
 
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = BASE_DIR / "templates"
@@ -34,8 +36,9 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="KORSHI TAP Admin Panel", lifespan=lifespan)
 logger = logging.getLogger(__name__)
 
-# Pages reachable without a password (Telegram WebApp map)
-PUBLIC_PATHS = {"/map"}
+# Pages reachable without a password. /map is not public: it lists names and
+# Telegram contacts of everyone, and the bot does not open it as a WebApp.
+PUBLIC_PATHS: set = set()
 
 ADMIN_PASSWORD = settings.ADMIN_PASSWORD
 if not ADMIN_PASSWORD:
@@ -115,7 +118,7 @@ async def map_view(request: Request, db: AsyncSession = Depends(get_db)):
         matching_seekers = []
         for sp, u in seekers_rows:
             if sp.districts and d in sp.districts:
-                contact_url = f"https://t.me/{u.username}" if u.username else f"tg://user?id={u.telegram_id}"
+                contact_url = get_chat_url(u)
                 matching_seekers.append({
                     "name": sp.name or u.first_name or "Соискатель",
                     "age": sp.age or u.age or 21,
@@ -133,7 +136,7 @@ async def map_view(request: Request, db: AsyncSession = Depends(get_db)):
         matching_listings = []
         for l, u in listings_rows:
             if l.district == d:
-                contact_url = f"https://t.me/{u.username}" if u.username else f"tg://user?id={u.telegram_id}"
+                contact_url = get_chat_url(u)
                 matching_listings.append({
                     "id": l.id,
                     "housing_type": l.housing_type,
@@ -171,7 +174,8 @@ async def map_view(request: Request, db: AsyncSession = Depends(get_db)):
 @app.get("/", response_class=HTMLResponse)
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_dashboard(request: Request, db: AsyncSession = Depends(get_db)):
-    users_count = (await db.execute(select(func.count(User.id)))).scalar_one()
+    users_count = (await db.execute(select(func.count(User.id)).where(User.is_seed == False))).scalar_one()
+    seed_count = (await db.execute(select(func.count(User.id)).where(User.is_seed == True))).scalar_one()
     active_listings = (await db.execute(select(func.count(Listing.id)).where(Listing.status == LISTING_STATUS_ACTIVE))).scalar_one()
     matches_count = (await db.execute(select(func.count(Match.id)))).scalar_one()
     pending_reports = (await db.execute(select(func.count(Report.id)).where(Report.status == "pending"))).scalar_one()
@@ -185,8 +189,13 @@ async def admin_dashboard(request: Request, db: AsyncSession = Depends(get_db)):
         cnt = (await db.execute(select(func.count(Listing.id)).where(Listing.district == d, Listing.status == LISTING_STATUS_ACTIVE))).scalar_one()
         districts_count[d] = cnt
 
+    funnel = await funnel_report(db)
+    funnel_counts_map = {s["label"]: s["count"] for s in funnel["steps"]}
     stats = {
+        "profiles_completed": funnel_counts_map.get("Анкета заполнена", 0),
+        "search_shown": funnel_counts_map.get("Увидели кандидатов", 0),
         "users_count": users_count,
+        "seed_count": seed_count,
         "active_listings": active_listings,
         "available_places": avail_sum,
         "matches_count": matches_count,
@@ -194,7 +203,7 @@ async def admin_dashboard(request: Request, db: AsyncSession = Depends(get_db)):
         "districts_count": districts_count,
     }
 
-    return templates.TemplateResponse(request=request, name="dashboard.html", context={"stats": stats})
+    return templates.TemplateResponse(request=request, name="dashboard.html", context={"stats": stats, "funnel": funnel})
 
 
 @app.get("/admin/users", response_class=HTMLResponse)
@@ -324,8 +333,14 @@ async def save_weights(
 
 
 @app.get("/admin/seed", response_class=HTMLResponse)
-async def admin_seed_view(request: Request, message: Optional[str] = None):
-    return templates.TemplateResponse(request=request, name="seed.html", context={"message": message})
+async def admin_seed_view(request: Request, message: Optional[str] = None, db: AsyncSession = Depends(get_db)):
+    seed_count = (await db.execute(select(func.count(User.id)).where(User.is_seed == True))).scalar_one()
+    real_count = (await db.execute(select(func.count(User.id)).where(User.is_seed == False))).scalar_one()
+    return templates.TemplateResponse(
+        request=request,
+        name="seed.html",
+        context={"message": message, "seed_count": seed_count, "real_count": real_count},
+    )
 
 
 @app.post("/admin/seed/populate")
@@ -334,6 +349,7 @@ async def populate_seed_data(
     city: str = Form("all"),
     db: AsyncSession = Depends(get_db),
 ):
+    count = max(1, min(count, 2000))
     res = await seed_database(db, count=count, city=city)
     msg = f"Успешно сгенерировано {res['users_created']} анкет и {res['listings_created']} объявлений!"
     return RedirectResponse(url=f"/admin/seed?message={msg}", status_code=status.HTTP_303_SEE_OTHER)
@@ -341,5 +357,6 @@ async def populate_seed_data(
 
 @app.post("/admin/seed/wipe")
 async def wipe_seed_data(db: AsyncSession = Depends(get_db)):
-    await wipe_database(db)
-    return RedirectResponse(url="/admin/seed?message=База данных очищена.", status_code=status.HTTP_303_SEE_OTHER)
+    deleted = await wipe_database(db)
+    msg = f"Удалено сидов: {deleted}. Реальные пользователи не тронуты."
+    return RedirectResponse(url=f"/admin/seed?message={msg}", status_code=status.HTTP_303_SEE_OTHER)

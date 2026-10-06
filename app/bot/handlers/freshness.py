@@ -50,6 +50,7 @@ async def find_stale_profiles(
             .where(
                 SeekerProfile.is_active == True,
                 User.is_blocked == False,
+                User.is_seed == False,
                 SeekerProfile.updated_at < threshold,
                 or_(
                     SeekerProfile.last_freshness_ping_at.is_(None),

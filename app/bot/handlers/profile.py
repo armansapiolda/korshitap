@@ -17,6 +17,7 @@ from app.constants import DEFAULT_CITY, LISTING_STATUS_ACTIVE, LISTING_STATUS_PA
 from app.db.base import async_session_factory
 from app.db.models import Listing, SeekerProfile, User
 from app.i18n import get_district_name
+from app.services.funnel_service import EVENT_PROFILE_HIDDEN, track
 from app.services.user_service import UserService
 
 router = Router(name="profile_router")
@@ -41,8 +42,7 @@ async def render_profile_view(event: Union[Message, CallbackQuery], user_id: int
     name = profile.name or user.first_name or ("Қолданушы" if lang == "kz" else "Пользователь")
     age = profile.age or user.age or 22
     city = profile.city or getattr(user, "city", None) or DEFAULT_CITY
-    district = profile.districts[0] if profile.districts else "Бостандыкский"
-    dist_name = get_district_name(district, lang)
+    dist_name = ", ".join(get_district_name(d, lang) for d in (profile.districts or ["Бостандыкский"]))
 
     gender_val = profile.gender or user.gender
     if lang == "kz":
@@ -210,6 +210,9 @@ async def cb_profile_toggle_notif(callback: CallbackQuery):
 async def set_profile_active(session, user_id: int, active: bool) -> None:
     """Hide or show the user's profile together with their listings."""
     profile = await UserService.get_or_create_seeker_profile(session, user_id)
+    if profile.is_active and not active:
+        telegram_id = (await session.execute(select(User.telegram_id).where(User.id == user_id))).scalar_one_or_none()
+        await track(session, telegram_id, EVENT_PROFILE_HIDDEN)
     profile.is_active = active
     profile.last_freshness_ping_at = None
     from_status, to_status = (
@@ -266,6 +269,95 @@ async def cb_profile_change_lang(callback: CallbackQuery):
 
 @router.callback_query(F.data == "profile_edit")
 async def cb_profile_edit(callback: CallbackQuery, state: FSMContext):
+    """Ask which part of the questionnaire to change."""
+    await callback.answer()
+    await state.clear()
+    async with async_session_factory() as session:
+        lang = await UserService.get_user_language(session, callback.from_user.id)
+
+    if lang == "kz":
+        text = "✏️ **Не өзгерткің келеді?**"
+        items = [
+            ("📍 Аудан", "districts"),
+            ("👥 Қандай көрші", "preferred_gender"),
+            ("💰 Бюджет / баға", "budget"),
+            ("📅 Көшу мерзімі", "move_in_date"),
+            ("🎯 Идеал көрші", "ideal_neighbor"),
+            ("📝 Өзің туралы", "about_self"),
+        ]
+        full, back = "🔄 Барлығын қайта толтыру", "⬅️ Артқа"
+    else:
+        text = "✏️ **Что хочешь изменить?**"
+        items = [
+            ("📍 Район", "districts"),
+            ("👥 Какого соседа", "preferred_gender"),
+            ("💰 Бюджет / цена", "budget"),
+            ("📅 Дата заезда", "move_in_date"),
+            ("🎯 Идеальный сосед", "ideal_neighbor"),
+            ("📝 О себе", "about_self"),
+        ]
+        full, back = "🔄 Заполнить всё заново", "⬅️ Назад"
+    rows = [
+        [InlineKeyboardButton(text=items[i][0], callback_data=f"pedit:{items[i][1]}"),
+         InlineKeyboardButton(text=items[i + 1][0], callback_data=f"pedit:{items[i + 1][1]}")]
+        for i in range(0, len(items), 2)
+    ]
+    rows.append([InlineKeyboardButton(text=full, callback_data="profile_edit_full")])
+    rows.append([InlineKeyboardButton(text=back, callback_data="profile_back")])
+    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="Markdown")
+
+
+@router.callback_query(F.data == "profile_back")
+async def cb_profile_back(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await state.clear()
+    await render_profile_view(callback, callback.from_user.id)
+
+
+@router.callback_query(F.data.startswith("pedit:"))
+async def cb_profile_edit_field(callback: CallbackQuery, state: FSMContext):
+    """Re-ask one questionnaire question; start.finish_single_edit saves the answer."""
+    from app.bot.handlers import start
+
+    field = callback.data.split(":")[1]
+    if field not in start.EDITABLE_FIELDS:
+        await callback.answer()
+        return
+    await callback.answer()
+
+    async with async_session_factory() as session:
+        user = await UserService.get_or_create_user(session, callback.from_user.id)
+        profile = await UserService.get_or_create_seeker_profile(session, user.id)
+        lang = user.language or "ru"
+        await state.clear()
+        await state.update_data(
+            lang=lang,
+            edit_field=field,
+            has_apartment=bool(profile.has_apartment),
+            city=profile.city or DEFAULT_CITY,
+            districts=list(profile.districts or []),
+            ideal_neighbor_desc=profile.ideal_neighbor_desc,
+            about_self_desc=profile.about_self_desc,
+        )
+        has_apt = bool(profile.has_apartment)
+
+    msg = callback.message
+    if field == "districts":
+        await start.ask_district(msg, state, lang)
+    elif field == "preferred_gender":
+        await start.ask_neighbor_gender(msg, state, lang)
+    elif field == "budget":
+        await start.ask_budget(msg, state, lang, has_apt=has_apt)
+    elif field == "move_in_date":
+        await start.ask_move_in_date(msg, state, lang, has_apt=has_apt)
+    elif field == "ideal_neighbor":
+        await start.ask_ideal_neighbor(msg, state, lang)
+    elif field == "about_self":
+        await start.ask_about_self(msg, state, lang)
+
+
+@router.callback_query(F.data == "profile_edit_full")
+async def cb_profile_edit_full(callback: CallbackQuery, state: FSMContext):
     """Restart questionnaire flow cleanly."""
     await callback.answer()
     await state.clear()
