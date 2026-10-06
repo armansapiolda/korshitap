@@ -137,6 +137,22 @@ async def test_cold_search_apartment_owner(test_session):
         is_active=True,
     )
     test_session.add(profile)
+
+    # A seeker who certainly fits (seed data is random and may not contain one)
+    cand_user = User(id=999920, telegram_id=999920, first_name="Аружан", gender="female", preferred_gender="female")
+    test_session.add(cand_user)
+    await test_session.flush()
+    test_session.add(SeekerProfile(
+        user_id=cand_user.id,
+        name="Аружан",
+        gender="female",
+        preferred_gender="female",
+        city="Алматы",
+        districts=["Алмалинский"],
+        has_apartment=False,
+        budget_max=150000,
+        is_active=True,
+    ))
     await test_session.commit()
 
     primary, secondary = await perform_cold_search(
