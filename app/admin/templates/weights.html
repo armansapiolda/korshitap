@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="mb-6">
+  <h1 class="text-2xl font-bold text-white">⚙️ Настройка формулы AI-матчинга</h1>
+  <p class="text-gray-400 text-sm">Изменение весов ранжирования и параметров актуальности без перезапуска сервера</p>
+</div>
+
+<div class="max-w-2xl bg-gray-800 border border-gray-700 rounded-xl p-6 shadow">
+  {% if saved %}
+  <div class="mb-6 p-4 rounded-lg bg-emerald-900/60 border border-emerald-700 text-emerald-200 text-sm font-semibold">
+    ✅ Веса и параметры успешно обновлены в базе данных!
+  </div>
+  {% endif %}
+
+  <form method="POST" action="/admin/weights" class="space-y-6">
+    <div class="space-y-4">
+      <div class="border-b border-gray-700 pb-4">
+        <label class="flex justify-between font-medium text-white mb-1">
+          <span>📍 Район Алматы (главный фильтр):</span>
+          <span class="text-indigo-400 font-bold" id="lbl_district">{{ "{:.0f}%".format(weights.district * 100) }}</span>
+        </label>
+        <input type="range" name="district" min="0.10" max="0.60" step="0.05" value="{{ weights.district }}"
+          class="w-full h-2 bg-gray-700 rounded-lg cursor-pointer accent-indigo-500"
+          oninput="document.getElementById('lbl_district').innerText = Math.round(this.value * 100) + '%'">
+        <p class="text-xs text-gray-500 mt-1">Рекомендуется не менее 35% для гарантии приоритета выбранного района.</p>
+      </div>
+
+      <div class="border-b border-gray-700 pb-4">
+        <label class="flex justify-between font-medium text-white mb-1">
+          <span>💰 Бюджет:</span>
+          <span class="text-emerald-400 font-bold" id="lbl_budget">{{ "{:.0f}%".format(weights.budget * 100) }}</span>
+        </label>
+        <input type="range" name="budget" min="0.05" max="0.40" step="0.05" value="{{ weights.budget }}"
+          class="w-full h-2 bg-gray-700 rounded-lg cursor-pointer accent-emerald-500"
+          oninput="document.getElementById('lbl_budget').innerText = Math.round(this.value * 100) + '%'">
+      </div>
+
+      <div class="border-b border-gray-700 pb-4">
+        <label class="flex justify-between font-medium text-white mb-1">
+          <span>📅 Дата заселения:</span>
+          <span class="text-blue-400 font-bold" id="lbl_date">{{ "{:.0f}%".format(weights.move_in_date * 100) }}</span>
+        </label>
+        <input type="range" name="move_in_date" min="0.05" max="0.30" step="0.05" value="{{ weights.move_in_date }}"
+          class="w-full h-2 bg-gray-700 rounded-lg cursor-pointer accent-blue-500"
+          oninput="document.getElementById('lbl_date').innerText = Math.round(this.value * 100) + '%'">
+      </div>
+
+      <div class="border-b border-gray-700 pb-4">
+        <label class="flex justify-between font-medium text-white mb-1">
+          <span>🛏 Формат жилья (комната/место/подселение):</span>
+          <span class="text-purple-400 font-bold" id="lbl_housing">{{ "{:.0f}%".format(weights.housing_type * 100) }}</span>
+        </label>
+        <input type="range" name="housing_type" min="0.05" max="0.25" step="0.05" value="{{ weights.housing_type }}"
+          class="w-full h-2 bg-gray-700 rounded-lg cursor-pointer accent-purple-500"
+          oninput="document.getElementById('lbl_housing').innerText = Math.round(this.value * 100) + '%'">
+      </div>
+
+      <div class="border-b border-gray-700 pb-4">
+        <label class="flex justify-between font-medium text-white mb-1">
+          <span>🚭 Образ жизни (курение, животные):</span>
+          <span class="text-amber-400 font-bold" id="lbl_lifestyle">{{ "{:.0f}%".format(weights.lifestyle * 100) }}</span>
+        </label>
+        <input type="range" name="lifestyle" min="0.05" max="0.25" step="0.05" value="{{ weights.lifestyle }}"
+          class="w-full h-2 bg-gray-700 rounded-lg cursor-pointer accent-amber-500"
+          oninput="document.getElementById('lbl_lifestyle').innerText = Math.round(this.value * 100) + '%'">
+      </div>
+
+      <div class="border-b border-gray-700 pb-4">
+        <label class="flex justify-between font-medium text-white mb-1">
+          <span>👥 Пол и предпочтения:</span>
+          <span class="text-rose-400 font-bold" id="lbl_gender">{{ "{:.0f}%".format(weights.gender * 100) }}</span>
+        </label>
+        <input type="range" name="gender" min="0.0" max="0.20" step="0.05" value="{{ weights.gender }}"
+          class="w-full h-2 bg-gray-700 rounded-lg cursor-pointer accent-rose-500"
+          oninput="document.getElementById('lbl_gender').innerText = Math.round(this.value * 100) + '%'">
+      </div>
+    </div>
+
+    <div class="pt-2">
+      <button type="submit" class="w-full py-3 px-4 rounded-lg font-bold bg-indigo-600 hover:bg-indigo-500 text-white shadow transition">
+        💾 Сохранить изменения весов
+      </button>
+    </div>
+  </form>
+</div>
+{% endblock %}

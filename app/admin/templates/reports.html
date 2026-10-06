@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="mb-6">
+  <h1 class="text-2xl font-bold text-white">Жалобы и модерация</h1>
+  <p class="text-gray-400 text-sm">Проверка подозрительных профилей, мошенников и неактуальных объявлений</p>
+</div>
+
+<div class="bg-gray-800 border border-gray-700 rounded-xl overflow-hidden shadow">
+  <table class="w-full text-left text-sm text-gray-300">
+    <thead class="bg-gray-750 uppercase text-xs text-gray-400 border-b border-gray-700">
+      <tr>
+        <th class="px-6 py-3">ID</th>
+        <th class="px-6 py-3">Отправитель</th>
+        <th class="px-6 py-3">Цель жалобы</th>
+        <th class="px-6 py-3">Причина</th>
+        <th class="px-6 py-3">Статус</th>
+        <th class="px-6 py-3 text-right">Действия</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-700">
+      {% for r in reports %}
+      <tr class="hover:bg-gray-750">
+        <td class="px-6 py-4 font-mono text-xs text-gray-400">{{ r.id }}</td>
+        <td class="px-6 py-4">
+          <div class="font-medium text-white">{{ r.reporter.first_name }}</div>
+          {% if r.reporter.username %}
+          <div class="text-xs text-indigo-400">@{{ r.reporter.username }}</div>
+          {% endif %}
+        </td>
+        <td class="px-6 py-4 font-mono text-xs text-amber-300">
+          {{ r.target_type }} #{{ r.target_id }}
+        </td>
+        <td class="px-6 py-4">
+          <span class="px-2 py-0.5 rounded text-xs font-semibold bg-rose-950 text-rose-300 border border-rose-800">
+            {{ r.reason }}
+          </span>
+          {% if r.details %}
+          <div class="text-xs text-gray-400 mt-1 italic">{{ r.details }}</div>
+          {% endif %}
+        </td>
+        <td class="px-6 py-4">
+          <span class="px-2 py-0.5 rounded text-xs font-semibold
+            {% if r.status == 'pending' %}bg-amber-900 text-amber-300
+            {% elif r.status == 'resolved' %}bg-emerald-900 text-emerald-300
+            {% else %}bg-gray-700 text-gray-400{% endif %}">
+            {{ r.status }}
+          </span>
+        </td>
+        <td class="px-6 py-4 text-right space-x-2">
+          <form method="POST" action="/admin/reports/{{ r.id }}/resolve" class="inline">
+            <button type="submit" class="text-xs px-2.5 py-1 rounded bg-emerald-800 hover:bg-emerald-700 text-white">
+              ✓ Решено
+            </button>
+          </form>
+          <form method="POST" action="/admin/reports/{{ r.id }}/dismiss" class="inline">
+            <button type="submit" class="text-xs px-2.5 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-300">
+              Отклонить
+            </button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

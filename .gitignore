@@ -1,0 +1,43 @@
+# Virtual Environment
+.venv/
+env/
+venv/
+ENV/
+
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pytest_cache/
+.coverage
+htmlcov/
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
+korshi_tap.db
+
+# Secrets & Credentials (CRITICAL)
+.env
+.env.local
+vertex_key.json
+*.key
+*.pem
+*.json.secret
+client_secrets.json
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editor & IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Temporary & local tunnels
+app/public_url.txt
+*.log

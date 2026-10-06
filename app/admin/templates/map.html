@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="kk">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>🗺 KORSHI TAP — Карта Алматы</title>
+  
+  <!-- Telegram WebApp SDK -->
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  
+  <!-- Tailwind CSS & Leaflet -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+    
+    * {
+      font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+      -webkit-tap-highlight-color: transparent;
+    }
+    
+    body {
+      background-color: #090D16;
+      color: #F1F5F9;
+      overflow: hidden;
+      touch-action: pan-x pan-y;
+    }
+    
+    #map {
+      height: 100vh;
+      width: 100vw;
+      z-index: 1;
+    }
+    
+    /* Sleek Custom Map Markers */
+    .district-marker {
+      background: rgba(15, 23, 42, 0.92);
+      border: 1.5px solid rgba(99, 102, 241, 0.6);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      padding: 6px 10px;
+      border-radius: 9999px;
+      color: white;
+      font-weight: 700;
+      font-size: 11px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4), 0 0 12px rgba(99, 102, 241, 0.3);
+      cursor: pointer;
+      transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+      white-space: nowrap;
+    }
+    
+    .district-marker:hover, .district-marker.active {
+      transform: scale(1.12);
+      border-color: #10B981;
+      box-shadow: 0 12px 30px rgba(16, 185, 129, 0.4);
+      background: rgba(16, 24, 39, 0.98);
+    }
+    
+    .pulse-dot {
+      width: 7px;
+      height: 7px;
+      background-color: #10B981;
+      border-radius: 50%;
+      box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+      animation: pulse 2s infinite;
+    }
+    
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.8); }
+      70% { box-shadow: 0 0 0 8px rgba(16, 185, 129, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+    }
+    
+    /* Glassmorphism Classes */
+    .glass-panel {
+      background: rgba(15, 23, 42, 0.85);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    
+    /* Scrollbar */
+    .no-scrollbar::-webkit-scrollbar {
+      display: none;
+    }
+    .no-scrollbar {
+      -ms-overflow-style: none;
+      scrollbar-width: none;
+    }
+
+    /* Bottom Sheet Animation */
+    #bottomSheet {
+      transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+      will-change: transform;
+    }
+    
+    .sheet-collapsed {
+      transform: translateY(calc(100% - 90px));
+    }
+    
+    .sheet-expanded {
+      transform: translateY(0%);
+    }
+    
+    .sheet-hidden {
+      transform: translateY(100%);
+    }
+  </style>
+</head>
+<body class="h-screen w-screen overflow-hidden flex flex-col relative select-none">
+
+  <!-- MAP CONTAINER -->
+  <div id="map" class="absolute inset-0"></div>
+
+  <!-- FLOATING TOP BAR -->
+  <div class="absolute top-0 left-0 right-0 z-20 px-3 pt-3 pb-2 bg-gradient-to-b from-[#090D16]/95 via-[#090D16]/75 to-transparent pointer-events-none">
+    
+    <!-- Top Header Row -->
+    <div class="flex items-center justify-between pointer-events-auto mb-2.5">
+      <div class="flex items-center space-x-2">
+        <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-600 to-emerald-500 flex items-center justify-center text-lg shadow-lg shadow-indigo-500/25">
+          🏔
+        </div>
+        <div>
+          <div class="flex items-center space-x-1.5">
+            <span class="font-extrabold text-sm tracking-tight text-white">KORSHI TAP</span>
+            <span class="text-[10px] font-bold uppercase tracking-wider bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-1.5 py-0.5 rounded-md">Алматы</span>
+          </div>
+          <p class="text-[10px] text-slate-400 font-medium" id="headerSubtitle">Кім қай ауданда іздеп жүр?</p>
+        </div>
+      </div>
+      
+      <!-- Stats & Lang Toggle -->
+      <div class="flex items-center space-x-2">
+        <div class="glass-panel px-2.5 py-1.5 rounded-xl text-[11px] font-semibold flex items-center space-x-2 text-slate-200 shadow-sm">
+          <span>👥 <b class="text-white" id="totalSeekersVal">{{ total_seekers }}</b></span>
+          <span class="text-slate-600">|</span>
+          <span>🏠 <b class="text-emerald-400" id="totalPlacesVal">{{ total_places }}</b></span>
+        </div>
+        
+        <button onclick="toggleLang()" class="glass-panel w-8 h-8 rounded-xl flex items-center justify-center text-xs font-bold text-indigo-300 hover:text-white transition active:scale-95 shadow-sm">
+          <span id="langBtnText">KZ</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- DISTRICT PILLS BAR (Horizontal Scrollable) -->
+    <div class="flex items-center space-x-2 overflow-x-auto no-scrollbar pointer-events-auto py-1">
+      <button onclick="selectDistrict(null)" id="pill-all" class="district-pill whitespace-nowrap px-3.5 py-1.5 rounded-full text-xs font-semibold bg-gradient-to-r from-indigo-600 to-indigo-500 text-white shadow-md shadow-indigo-600/30 transition active:scale-95">
+        ✨ <span data-kz="Барлығы" data-ru="Все">Барлығы</span>
+      </button>
+      
+      <div id="districtPillsContainer" class="flex space-x-2"></div>
+    </div>
+  </div>
+
+  <!-- FLOATING TYPE FILTER TOGGLE -->
+  <div class="absolute bottom-24 right-3 z-10 pointer-events-auto flex flex-col space-y-2">
+    <button onclick="filterType('all')" id="btnFilterAll" class="w-10 h-10 rounded-full glass-panel flex items-center justify-center text-sm shadow-xl active:scale-90 transition border-indigo-500/40 text-indigo-300 font-bold" title="Барлығы">
+      ✨
+    </button>
+    <button onclick="filterType('seekers')" id="btnFilterSeekers" class="w-10 h-10 rounded-full glass-panel flex items-center justify-center text-sm shadow-xl active:scale-90 transition text-slate-300" title="Іздеушілер">
+      👥
+    </button>
+    <button onclick="filterType('listings')" id="btnFilterListings" class="w-10 h-10 rounded-full glass-panel flex items-center justify-center text-sm shadow-xl active:scale-90 transition text-slate-300" title="Пәтерлер / Бөлмелер">
+      🏠
+    </button>
+  </div>
+
+  <!-- BOTTOM SHEET DRAWER (Mobile-First / Desktop-Friendly) -->
+  <div id="bottomSheet" class="absolute bottom-0 inset-x-0 z-30 max-w-xl mx-auto glass-panel rounded-t-3xl border-t border-slate-700/60 shadow-2xl flex flex-col max-h-[75vh] sheet-collapsed">
+    
+    <!-- Drag Handle & Sheet Header -->
+    <div onclick="toggleSheet()" class="pt-2.5 pb-2 px-4 cursor-pointer flex flex-col items-center select-none border-b border-slate-800/80">
+      <div class="w-10 h-1 rounded-full bg-slate-600/60 mb-2.5"></div>
+      
+      <div class="w-full flex items-center justify-between">
+        <div class="flex items-center space-x-2">
+          <span class="text-base" id="sheetIcon">📍</span>
+          <div>
+            <h2 id="sheetTitle" class="font-bold text-sm text-white">Бостандық ауданы</h2>
+            <div class="flex items-center space-x-2 text-[11px] text-slate-400">
+              <span id="sheetSeekersCount">👥 0 іздеуші</span>
+              <span>·</span>
+              <span id="sheetListingsCount" class="text-emerald-400">🏠 0 бос орын</span>
+            </div>
+          </div>
+        </div>
+        
+        <div class="flex items-center space-x-2">
+          <span id="sheetExpandIcon" class="text-xs bg-slate-800 text-slate-300 px-2 py-1 rounded-lg font-medium">
+            Жоғары тарту ⬆️
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sheet Content (Scrollable List) -->
+    <div id="sheetList" class="overflow-y-auto px-4 py-3 space-y-2.5 flex-1 overscroll-contain">
+      <!-- Dynamic seeker and listing cards will be injected here -->
+    </div>
+  </div>
+
+  <script>
+    // Initialize Telegram WebApp
+    const tg = window.Telegram?.WebApp;
+    if (tg) {
+      tg.ready();
+      tg.expand();
+      if (tg.setHeaderColor) tg.setHeaderColor('#090D16');
+      if (tg.setBackgroundColor) tg.setBackgroundColor('#090D16');
+    }
+
+    // Language management
+    let currentLang = 'kz';
+    function toggleLang() {
+      currentLang = currentLang === 'kz' ? 'ru' : 'kz';
+      document.getElementById('langBtnText').textContent = currentLang.toUpperCase();
+      document.getElementById('headerSubtitle').textContent = currentLang === 'kz' 
+        ? 'Кім қай ауданда іздеп жүр?' 
+        : 'Кто в каком районе ищет жильё?';
+      
+      document.querySelectorAll('[data-kz]').forEach(el => {
+        el.textContent = el.getAttribute(`data-${currentLang}`);
+      });
+      
+      renderDistrictPills();
+      if (activeDistrict) {
+        updateSheetContent(activeDistrict);
+      }
+    }
+
+    // Districts data from backend
+    const districtsData = {{ districts_json | safe }};
+    let activeDistrict = districtsData[0] || null;
+    let activeType = 'all'; // 'all', 'seekers', 'listings'
+    let isSheetExpanded = false;
+
+    // Initialize Map with dark tiles
+    const map = L.map('map', { 
+      zoomControl: false,
+      attributionControl: false
+    }).setView([43.2389, 76.8897], 12);
+
+    // High quality Voyager / Dark tiles
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+      maxZoom: 18,
+      subdomains: 'abcd',
+    }).addTo(map);
+
+    // Markers layer
+    const markersGroup = L.layerGroup().addTo(map);
+    const districtMarkers = {};
+
+    function renderMarkers() {
+      markersGroup.clearLayers();
+      
+      districtsData.forEach(d => {
+        const countDisplay = activeType === 'listings' 
+          ? `🏠 ${d.listings_count}` 
+          : (activeType === 'seekers' ? `👥 ${d.seekers_count}` : `👥 ${d.seekers_count} | 🏠 ${d.listings_count}`);
+
+        const isActive = activeDistrict && activeDistrict.name === d.name;
+        
+        const customIcon = L.divIcon({
+          className: 'custom-leaflet-marker',
+          html: `
+            <div class="district-marker ${isActive ? 'active' : ''}" onclick="event.stopPropagation(); selectDistrictByName('${d.name}')">
+              <span class="pulse-dot"></span>
+              <span>${d.name}</span>
+              <span class="text-emerald-400 font-bold ml-1">${countDisplay}</span>
+            </div>
+          `,
+          iconSize: [140, 34],
+          iconAnchor: [70, 17]
+        });
+
+        const marker = L.marker([d.lat, d.lng], { icon: customIcon });
+        marker.addTo(markersGroup);
+        districtMarkers[d.name] = marker;
+      });
+    }
+
+    // Render Pills
+    function renderDistrictPills() {
+      const container = document.getElementById('districtPillsContainer');
+      container.innerHTML = districtsData.map(d => {
+        const isSelected = activeDistrict && activeDistrict.name === d.name;
+        const baseClass = isSelected 
+          ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-emerald-500/30' 
+          : 'glass-panel text-slate-300 hover:text-white border-slate-700/60';
+        return `
+          <button onclick="selectDistrictByName('${d.name}')" class="whitespace-nowrap px-3 py-1.5 rounded-full text-xs font-medium ${baseClass} shadow-sm transition active:scale-95">
+            ${d.name} <span class="text-emerald-400 font-semibold ml-0.5">${d.seekers_count}</span>
+          </button>
+        `;
+      }).join('');
+    }
+
+    // Select District
+    function selectDistrict(district) {
+      activeDistrict = district;
+      const allPill = document.getElementById('pill-all');
+      
+      if (!district) {
+        allPill.className = 'district-pill whitespace-nowrap px-3.5 py-1.5 rounded-full text-xs font-semibold bg-gradient-to-r from-indigo-600 to-indigo-500 text-white shadow-md shadow-indigo-600/30 transition active:scale-95';
+        map.flyTo([43.2389, 76.8897], 12, { duration: 1 });
+        renderDistrictPills();
+        renderMarkers();
+        showAllSummary();
+        return;
+      }
+      
+      allPill.className = 'district-pill whitespace-nowrap px-3 py-1.5 rounded-full text-xs font-medium glass-panel text-slate-300 hover:text-white transition active:scale-95';
+      renderDistrictPills();
+      renderMarkers();
+      
+      map.flyTo([district.lat, district.lng], 13.5, { duration: 0.8 });
+      updateSheetContent(district);
+      openSheet();
+    }
+
+    function selectDistrictByName(name) {
+      const d = districtsData.find(item => item.name === name);
+      if (d) selectDistrict(d);
+    }
+
+    // Sheet Controls
+    const sheet = document.getElementById('bottomSheet');
+    function toggleSheet() {
+      isSheetExpanded = !isSheetExpanded;
+      if (isSheetExpanded) {
+        sheet.classList.remove('sheet-collapsed');
+        sheet.classList.add('sheet-expanded');
+        document.getElementById('sheetExpandIcon').textContent = currentLang === 'kz' ? 'Жабу ⬇️' : 'Свернуть ⬇️';
+      } else {
+        sheet.classList.remove('sheet-expanded');
+        sheet.classList.add('sheet-collapsed');
+        document.getElementById('sheetExpandIcon').textContent = currentLang === 'kz' ? 'Жоғары тарту ⬆️' : 'Развернуть ⬆️';
+      }
+    }
+
+    function openSheet() {
+      isSheetExpanded = true;
+      sheet.classList.remove('sheet-collapsed');
+      sheet.classList.add('sheet-expanded');
+      document.getElementById('sheetExpandIcon').textContent = currentLang === 'kz' ? 'Жабу ⬇️' : 'Свернуть ⬇️';
+    }
+
+    // Update Sheet Content
+    function updateSheetContent(d) {
+      document.getElementById('sheetTitle').textContent = `${d.name} ауданы`;
+      document.getElementById('sheetSeekersCount').textContent = currentLang === 'kz' 
+        ? `👥 ${d.seekers_count} іздеуші` 
+        : `👥 ${d.seekers_count} соискателей`;
+      document.getElementById('sheetListingsCount').textContent = currentLang === 'kz' 
+        ? `🏠 ${d.listings_count} бос орын` 
+        : `🏠 ${d.listings_count} мест`;
+
+      const listContainer = document.getElementById('sheetList');
+      let html = '';
+
+      // Seekers
+      if (activeType !== 'listings' && d.seekers && d.seekers.length > 0) {
+        html += `
+          <div class="text-[11px] font-bold uppercase tracking-wider text-indigo-400 mb-1 flex items-center">
+            <span class="w-1.5 h-1.5 rounded-full bg-indigo-500 mr-1.5"></span>
+            ${currentLang === 'kz' ? 'Көрші іздеп жүргендер:' : 'Ищут соседа в этом районе:'}
+          </div>
+        `;
+        html += d.seekers.map(s => `
+          <div class="p-3 rounded-2xl bg-slate-800/80 border border-slate-700/60 shadow-md flex flex-col space-y-2">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center space-x-2.5">
+                <div class="w-9 h-9 rounded-full bg-gradient-to-tr from-indigo-500 to-purple-500 flex items-center justify-center font-bold text-white text-sm shadow">
+                  ${s.name.charAt(0)}
+                </div>
+                <div>
+                  <div class="font-bold text-white text-sm flex items-center space-x-1">
+                    <span>${s.name}, ${s.age}</span>
+                    ${s.occupation === 'student' ? '<span class="text-xs">🎓</span>' : '<span class="text-xs">💼</span>'}
+                  </div>
+                  <div class="text-[10px] text-slate-400">📅 ${s.date}</div>
+                </div>
+              </div>
+              <div class="text-right">
+                <div class="text-xs font-extrabold text-emerald-400">${Number(s.budget).toLocaleString()} ₸</div>
+                <div class="text-[9px] text-slate-400">${currentLang === 'kz' ? 'бюджет' : 'бюджет'}</div>
+              </div>
+            </div>
+
+            <p class="text-xs text-slate-300 leading-relaxed italic bg-slate-900/60 p-2 rounded-xl border border-slate-800">
+              "${s.bio}"
+            </p>
+
+            <div class="flex items-center justify-between pt-1">
+              <div class="flex items-center space-x-1.5 text-[10px] text-slate-400">
+                <span class="bg-slate-700/60 px-1.5 py-0.5 rounded">🚭 Темекісіз</span>
+                <span class="bg-slate-700/60 px-1.5 py-0.5 rounded">🐾 Жануарсыз</span>
+              </div>
+              <a href="${s.contact_url}" target="_blank" class="px-3 py-1.5 rounded-xl bg-gradient-to-r from-indigo-500 to-indigo-600 hover:from-indigo-600 hover:to-indigo-700 text-white font-semibold text-xs flex items-center space-x-1 shadow-md shadow-indigo-500/20 active:scale-95 transition">
+                <span>💬</span>
+                <span>${currentLang === 'kz' ? 'Жазу' : 'Написать'}</span>
+              </a>
+            </div>
+          </div>
+        `).join('');
+      }
+
+      // Listings
+      if (activeType !== 'seekers' && d.listings && d.listings.length > 0) {
+        html += `
+          <div class="text-[11px] font-bold uppercase tracking-wider text-emerald-400 mt-3 mb-1 flex items-center">
+            <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 mr-1.5"></span>
+            ${currentLang === 'kz' ? 'Бос орындары бар пәтерлер:' : 'Свободные места и квартиры:'}
+          </div>
+        `;
+        html += d.listings.map(l => `
+          <div class="p-3 rounded-2xl bg-slate-800/80 border border-emerald-900/30 shadow-md flex flex-col space-y-2">
+            <div class="flex items-center justify-between">
+              <div>
+                <div class="font-bold text-white text-sm flex items-center space-x-1.5">
+                  <span>🏠 ${l.landmark}</span>
+                  ${l.urgent ? '<span class="text-[9px] bg-rose-500/20 text-rose-300 font-bold px-1.5 py-0.5 rounded border border-rose-500/40">🔥 СРОЧНО</span>' : ''}
+                </div>
+                <div class="text-[10px] text-emerald-300 font-medium">Бос орын: ${l.places} адамға</div>
+              </div>
+              <div class="text-right">
+                <div class="text-xs font-extrabold text-emerald-400">${Number(l.price).toLocaleString()} ₸</div>
+                <div class="text-[9px] text-slate-400">${currentLang === 'kz' ? 'айына/адам' : 'в месяц/чел'}</div>
+              </div>
+            </div>
+
+            <p class="text-xs text-slate-300 leading-relaxed bg-slate-900/60 p-2 rounded-xl border border-slate-800">
+              ${l.description}
+            </p>
+
+            <div class="flex items-center justify-between pt-1">
+              <span class="text-[10px] text-slate-400">📅 ${l.move_in_date}</span>
+              <a href="${l.contact_url}" target="_blank" class="px-3 py-1.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white font-semibold text-xs flex items-center space-x-1 shadow-md shadow-emerald-500/20 active:scale-95 transition">
+                <span>💬</span>
+                <span>${currentLang === 'kz' ? 'Байланысу' : 'Связаться'}</span>
+              </a>
+            </div>
+          </div>
+        `).join('');
+      }
+
+      if (!html) {
+        html = `
+          <div class="text-center py-8 text-slate-400">
+            <div class="text-3xl mb-2">🔍</div>
+            <p class="text-xs font-medium">${currentLang === 'kz' ? 'Бұл ауданда әзірге жаңа соискательдер жоқ' : 'В этом районе пока нет активных соискателей'}</p>
+          </div>
+        `;
+      }
+
+      listContainer.innerHTML = html;
+    }
+
+    function showAllSummary() {
+      document.getElementById('sheetTitle').textContent = currentLang === 'kz' ? 'Алматы қаласы — Барлық аудандар' : 'Алматы — Все районы';
+      document.getElementById('sheetSeekersCount').textContent = currentLang === 'kz' ? 'Барлығы 8 аудан' : 'Все 8 районов';
+      document.getElementById('sheetListingsCount').textContent = '';
+
+      const listContainer = document.getElementById('sheetList');
+      listContainer.innerHTML = districtsData.map(d => `
+        <div onclick="selectDistrictByName('${d.name}')" class="p-3 rounded-2xl bg-slate-800/60 hover:bg-slate-800 border border-slate-700/60 flex items-center justify-between cursor-pointer transition active:scale-98">
+          <div class="flex items-center space-x-3">
+            <div class="w-8 h-8 rounded-xl bg-indigo-500/20 text-indigo-400 flex items-center justify-center font-bold text-sm">
+              📍
+            </div>
+            <div>
+              <div class="font-bold text-white text-sm">${d.name}</div>
+              <div class="text-[10px] text-slate-400">👥 ${d.seekers_count} іздеуші · 🏠 ${d.listings_count} бос орын</div>
+            </div>
+          </div>
+          <span class="text-indigo-400 text-xs font-semibold">Ашу ➔</span>
+        </div>
+      `).join('');
+    }
+
+    // Filter Type Toggle
+    function filterType(type) {
+      activeType = type;
+      document.getElementById('btnFilterAll').className = type === 'all' 
+        ? 'w-10 h-10 rounded-full glass-panel flex items-center justify-center text-sm shadow-xl border-indigo-500/80 text-indigo-300 font-bold scale-105' 
+        : 'w-10 h-10 rounded-full glass-panel flex items-center justify-center text-sm shadow-xl text-slate-400';
+      document.getElementById('btnFilterSeekers').className = type === 'seekers' 
+        ? 'w-10 h-10 rounded-full glass-panel flex items-center justify-center text-sm shadow-xl border-indigo-500/80 text-indigo-300 font-bold scale-105' 
+        : 'w-10 h-10 rounded-full glass-panel flex items-center justify-center text-sm shadow-xl text-slate-400';
+      document.getElementById('btnFilterListings').className = type === 'listings' 
+        ? 'w-10 h-10 rounded-full glass-panel flex items-center justify-center text-sm shadow-xl border-emerald-500/80 text-emerald-300 font-bold scale-105' 
+        : 'w-10 h-10 rounded-full glass-panel flex items-center justify-center text-sm shadow-xl text-slate-400';
+
+      renderMarkers();
+      if (activeDistrict) updateSheetContent(activeDistrict);
+    }
+
+    // Initial render
+    renderDistrictPills();
+    renderMarkers();
+    if (activeDistrict) {
+      updateSheetContent(activeDistrict);
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="mb-6">
+  <h1 class="text-2xl font-bold text-white">Активные Match (Взаимный интерес)</h1>
+  <p class="text-gray-400 text-sm">Связанные пары соискателей и владельцев жилья в Алматы</p>
+</div>
+
+<div class="bg-gray-800 border border-gray-700 rounded-xl overflow-hidden shadow">
+  <table class="w-full text-left text-sm text-gray-300">
+    <thead class="bg-gray-750 uppercase text-xs text-gray-400 border-b border-gray-700">
+      <tr>
+        <th class="px-6 py-3">ID</th>
+        <th class="px-6 py-3">Соискатель</th>
+        <th class="px-6 py-3">Владелец жилья</th>
+        <th class="px-6 py-3">Район и цена</th>
+        <th class="px-6 py-3">Дата совпадения</th>
+        <th class="px-6 py-3">Статус</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-700">
+      {% for m in matches %}
+      <tr class="hover:bg-gray-750">
+        <td class="px-6 py-4 font-mono text-xs text-gray-400">{{ m.id }}</td>
+        <td class="px-6 py-4">
+          <div class="font-bold text-white">{{ m.seeker_user.first_name }}</div>
+          {% if m.seeker_user.username %}
+          <div class="text-xs text-indigo-400">@{{ m.seeker_user.username }}</div>
+          {% endif %}
+        </td>
+        <td class="px-6 py-4">
+          <div class="font-bold text-white">{{ m.owner_user.first_name }}</div>
+          {% if m.owner_user.username %}
+          <div class="text-xs text-indigo-400">@{{ m.owner_user.username }}</div>
+          {% endif %}
+        </td>
+        <td class="px-6 py-4">
+          <div class="text-white font-medium">📍 {{ m.listing.district }}</div>
+          <div class="text-xs text-emerald-400">{{ "{:,}".format(m.listing.price_per_person) }} ₸</div>
+        </td>
+        <td class="px-6 py-4 text-xs text-gray-400">
+          {{ m.matched_at.strftime('%d.%m.%Y %H:%M') }}
+        </td>
+        <td class="px-6 py-4">
+          <span class="px-2 py-0.5 rounded text-xs font-semibold bg-emerald-900 text-emerald-300 border border-emerald-700">
+            {{ m.status }}
+          </span>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
