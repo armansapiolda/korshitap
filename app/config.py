@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     ADMIN_HOST: str = "127.0.0.1"
     ADMIN_PORT: int = 8000
     ADMIN_SECRET_KEY: str = "korshi-tap-secret-key-change-in-production"
+    # HTTP Basic credentials for /admin. If ADMIN_PASSWORD is empty, a random
+    # one-time password is generated at startup and printed to the log.
+    ADMIN_USERNAME: str = "admin"
+    ADMIN_PASSWORD: Optional[str] = None
 
     # Freshness Check (days before prompt)
     LISTING_FRESHNESS_DAYS: int = 7

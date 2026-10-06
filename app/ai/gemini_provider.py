@@ -15,7 +15,7 @@ from app.ai.base import (
 )
 from app.ai.mock_provider import MockAIProvider
 from app.config import settings
-from app.constants import ALMATY_DISTRICTS
+from app.constants import CITY_DISTRICTS
 
 logger = logging.getLogger(__name__)
 
@@ -63,11 +63,12 @@ class GeminiAIProvider(AIProvider):
         if not client:
             return await self.mock_fallback.parse_seeker_text(text)
 
-        districts_str = ", ".join(ALMATY_DISTRICTS)
+        districts_str = "\n".join(f"- {city}: {', '.join(ds)}" for city, ds in CITY_DISTRICTS.items())
         prompt = f"""
-Ты AI-ассистент сервиса KORSHI TAP для поиска жилья и соседей в городе Алматы.
+Ты AI-ассистент сервиса KORSHI TAP для поиска жилья и соседей в Казахстане (Алматы, Астана, Шымкент).
 Проанализируй текст соискателя жилья и извлеки структурированные данные.
-Официальные 8 районов Алматы: {districts_str}.
+Официальные районы по городам:
+{districts_str}
 
 Текст пользователя:
 \"\"\"{text}\"\"\"
@@ -76,8 +77,8 @@ class GeminiAIProvider(AIProvider):
 - name: имя (если упомянуто, иначе null)
 - age: возраст (число или null)
 - gender: "male", "female" или null
-- city: "Алматы"
-- districts: массив строк из списка официальных районов Алматы, которые подходят пользователю
+- city: "Алматы", "Астана" или "Шымкент" (если город не упомянут — "Алматы")
+- districts: массив строк из списка официальных районов ЭТОГО города, которые подходят пользователю
 - budget_max: число, максимальный бюджет в тенге (например 100000)
 - move_in_date: строка, дата заселения (например "с 15 сентября")
 - spots_needed: число необходимых мест (по умолчанию 1)
@@ -168,7 +169,7 @@ class GeminiAIProvider(AIProvider):
             return await self.mock_fallback.calculate_compatibility(seeker_info, listing_info)
 
         prompt = f"""
-Ты экспертный AI-ранжировщик сервиса KORSHI TAP в Алматы.
+Ты экспертный AI-ранжировщик сервиса KORSHI TAP (Алматы, Астана, Шымкент).
 Оцени совместимость соискателя жилья и объявления.
 
 Данные соискателя:
@@ -178,7 +179,7 @@ class GeminiAIProvider(AIProvider):
 {json.dumps(listing_info, ensure_ascii=False, default=str)}
 
 Обрати особое внимание на:
-1. Район Алматы (критический приоритет)
+1. Район (критический приоритет)
 2. Бюджет (в тенге)
 3. Дату заселения
 4. Совместимость образов жизни (курение, животные, студенты/работающие)
@@ -246,6 +247,7 @@ class GeminiAIProvider(AIProvider):
 1. Сравни всех переданных кандидатов МЕЖДУ СОБОЙ относительно текущего пользователя.
 2. Расположи их в строгом порядке: от наиболее подходящего к менее подходящему (rank_order: 1 для лучшего, 2 для следующего и т.д.). Включи ВСЕХ переданных кандидатов.
 3. Оценивай реальные факторы: район, бюджет, сроки заселения, статус жилья (есть ли квартира, отдельная/общая комната), стиль жизни (студент/работа, чистота, тишина).
+   Поле lifestyle_criteria — извлечённые из анкеты привычки (lifestyle, parties, smoking, cleanliness, pets, schedule, guest_policy): поднимай выше тех, у кого они совпадают с пользователем, и ниже тех, у кого явный конфликт (например, «строго не курить» против курящего).
 
 СТРОГИЕ ТРЕБОВАНИЯ К ОБЪЯСНЕНИЮ (human_reason):
 - Текст должен быть МАКСИМАЛЬНО ПРИЗЕМЛЁННЫМ, СВЕРХКОРОТКИМ И СТРОГО ПО ФАКТУ (1 короткое предложение, максимум 15-18 слов).

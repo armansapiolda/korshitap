@@ -18,12 +18,13 @@ from sqlalchemy import select
 from app.ai.factory import get_ai_provider
 from app.bot.keyboards.reply import MENU_SEARCH_KZ, MENU_SEARCH_RU
 from app.bot.notifications import get_chat_url
-from app.constants import ADJACENT_DISTRICTS, DEFAULT_CITY
+from app.constants import ADJACENT_DISTRICTS, DEFAULT_CITY, LISTING_STATUS_ACTIVE
 from app.db.base import async_session_factory
 from app.db.models import Listing, SeekerProfile, User
 from app.i18n import get_district_name
 from app.matching.cold_search import ColdCandidate, perform_cold_search
 from app.matching.reason_generator import generate_human_match_reason
+from app.services.candidate_event_service import KIND_SHOWN, CandidateEventService
 from app.services.user_service import UserService
 
 router = Router(name="recommendations_router")
@@ -250,7 +251,6 @@ async def show_instant_recommendations(
         my_districts = (my_prof.districts if my_prof and my_prof.districts else [])
         my_district = district_filter or (my_districts[0] if my_districts else "Бостандыкский")
         dist_name = get_district_name(my_district, lang)
-        has_apt = bool(my_prof and my_prof.has_apartment)
         user_pref_gender = getattr(user, "preferred_gender", None) or (my_prof.preferred_gender if my_prof else None) or "any"
 
         # Owner's criteria if any
@@ -260,6 +260,9 @@ async def show_instant_recommendations(
             )
         ).scalars().first()
         my_criteria = my_listing.neighbor_criteria if my_listing and my_listing.neighbor_criteria else {}
+        has_apt = bool(my_prof and my_prof.has_apartment) or bool(
+            my_listing and my_listing.status == LISTING_STATUS_ACTIVE and (my_listing.available_places or 0) > 0
+        )
         if my_listing and my_listing.preferred_gender and my_listing.preferred_gender != "any":
             user_pref_gender = my_listing.preferred_gender
 
@@ -271,6 +274,13 @@ async def show_instant_recommendations(
             district_filter=my_district,
             allow_adjacent=show_adjacent,
         )
+
+        # Skip people this user has already seen in earlier recommendations
+        shown_ids = await CandidateEventService.get_candidate_ids(session, user.id, KIND_SHOWN)
+
+    found_total = len(primary_cands) + len(secondary_cands)
+    primary_cands = [c for c in primary_cands if c.user.id not in shown_ids]
+    secondary_cands = [c for c in secondary_cands if c.user.id not in shown_ids]
 
     # Candidate selection logic based on housing status:
     # If viewer has apartment: primary_cands are seekers without apartments.
@@ -288,6 +298,42 @@ async def show_instant_recommendations(
             pool = primary_cands + secondary_cands[:needed]
 
     btn_chat_label = "💬 Сөйлесу" if lang == "kz" else "💬 Написать"
+
+    # Everyone matching was already shown earlier
+    if not pool and found_total > 0:
+        seen_text = (
+            "👀 **Саған сәйкес келетін адамдардың барлығын көрдің.**\n\n"
+            "Жаңа адам тіркелгенде хабарлаймын. Тізімді басынан қайта көрсетейін бе?"
+            if lang == "kz"
+            else
+            "👀 **Ты уже посмотрел всех подходящих людей.**\n\n"
+            "Когда появится кто-то новый, я сообщу. Показать список заново?"
+        )
+        reset_cb = f"rec_reset:{my_district}:{1 if show_adjacent else 0}"
+        btns = [
+            [InlineKeyboardButton(text="🔁 Қайта көрсету" if lang == "kz" else "🔁 Показать заново", callback_data=reset_cb)],
+            [
+                InlineKeyboardButton(
+                    text="🔔 Хабарламаларды қосу" if lang == "kz" else "🔔 Включить уведомления",
+                    callback_data="toggle_notif:enable",
+                )
+            ],
+        ]
+        if ADJACENT_DISTRICTS.get(my_district) and not show_adjacent:
+            btns.append([
+                InlineKeyboardButton(
+                    text="🏘 Көршілес аудандарды көрсету" if lang == "kz" else "🏘 Показать соседние районы",
+                    callback_data=f"rec_adjacent:{my_district}",
+                )
+            ])
+        btns.append([
+            InlineKeyboardButton(
+                text="📍 Басқа аудандарды қарау" if lang == "kz" else "📍 Смотреть другие районы",
+                callback_data="dist_filter:all",
+            )
+        ])
+        await send_msg(seen_text, reply_markup=InlineKeyboardMarkup(inline_keyboard=btns), parse_mode="Markdown")
+        return
 
     # Zero candidates fallback
     if not pool:
@@ -369,6 +415,7 @@ async def show_instant_recommendations(
         "about_self": (my_prof.about_self_desc if my_prof else "") or (my_prof.raw_bio if my_prof else ""),
         "ideal_neighbor": (my_prof.ideal_neighbor_desc if my_prof else "") or (my_prof.neighbor_preferences if my_prof else ""),
         "preferred_room_type": my_prof.preferred_room_type if my_prof else None,
+        "lifestyle_criteria": (my_prof.neighbor_criteria if my_prof and my_prof.neighbor_criteria else my_criteria) or {},
     }
 
     candidates_dict = [c.to_ai_dict() for c in pool]
@@ -412,7 +459,12 @@ async def show_instant_recommendations(
     await send_msg(header_text, parse_mode="Markdown")
 
     # Send candidate cards with individualized reasons
-    for cand, reason in ranked_cards_data[:5]:
+    shown_cards = ranked_cards_data[:5]
+    async with async_session_factory() as session:
+        await CandidateEventService.record(session, user.id, [c.user.id for c, _ in shown_cards], KIND_SHOWN)
+        await session.commit()
+
+    for cand, reason in shown_cards:
         card_text = format_candidate_card(
             cand.profile,
             cand.user,
@@ -496,6 +548,24 @@ async def cb_rec_adjacent(callback: CallbackQuery):
     await callback.answer()
     district = callback.data.split(":")[1]
     await show_instant_recommendations(callback, callback.from_user.id, district_filter=district, show_adjacent=True)
+
+
+@router.callback_query(F.data.startswith("rec_reset:"))
+async def cb_rec_reset(callback: CallbackQuery):
+    """Forget already shown candidates and show the list from the start."""
+    await callback.answer()
+    _, district, adjacent = callback.data.split(":")
+    async with async_session_factory() as session:
+        user = await UserService.get_user_by_telegram_id(session, callback.from_user.id)
+        if user:
+            await CandidateEventService.reset(session, user.id, KIND_SHOWN)
+            await session.commit()
+    await show_instant_recommendations(
+        callback,
+        callback.from_user.id,
+        district_filter=district,
+        show_adjacent=adjacent == "1",
+    )
 
 
 @router.callback_query(F.data.startswith("toggle_notif:"))

@@ -74,6 +74,7 @@ async def init_db() -> None:
             "about_self_desc TEXT",
             "neighbor_criteria JSON",
             "notifications_enabled BOOLEAN DEFAULT 1",
+            "last_freshness_ping_at DATETIME",
         ]:
             try:
                 await conn.execute(text(f"ALTER TABLE seeker_profiles ADD COLUMN {col_def}"))

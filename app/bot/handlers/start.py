@@ -18,9 +18,33 @@ from app.bot.states import QuestionnaireState
 from app.constants import CITIES, CITY_DISTRICTS, DEFAULT_CITY
 from app.db.base import async_session_factory
 from app.i18n import get_district_name
+from app.services.listing_service import ListingService
 from app.services.user_service import UserService
 
 router = Router(name="start_router")
+
+# Keep references to fire-and-forget tasks so they are not garbage collected.
+_background_tasks: set = set()
+
+
+async def check_free_text(message: Message, lang: str) -> str | None:
+    """Return cleaned free text, or None (after asking to rewrite) if it is empty or flagged."""
+    text = (message.text or "").strip()
+    if not text:
+        await message.answer(
+            "Мәтінмен жазып жіберші 🙏" if lang == "kz" else "Напиши, пожалуйста, текстом 🙏"
+        )
+        return None
+    moderation = await get_ai_provider().moderate_content(text)
+    if not moderation.is_safe:
+        await message.answer(
+            "Бұл мәтін тексеруден өтпеді 🙅 Басқаша жазып көрші."
+            if lang == "kz"
+            else
+            "Этот текст не прошёл проверку 🙅 Попробуй написать по-другому."
+        )
+        return None
+    return text
 
 
 # ==============================================================================
@@ -721,11 +745,12 @@ async def cb_pick_move_in_date(callback: CallbackQuery, state: FSMContext):
 
 @router.message(QuestionnaireState.waiting_ideal_neighbor)
 async def process_ideal_neighbor(message: Message, state: FSMContext):
-    desc = message.text.strip()
-    await state.update_data(ideal_neighbor_desc=desc, neighbor_preferences=desc)
-
     data = await state.get_data()
     lang = data.get("lang", "kz")
+    desc = await check_free_text(message, lang)
+    if desc is None:
+        return
+    await state.update_data(ideal_neighbor_desc=desc, neighbor_preferences=desc)
 
     await state.set_state(QuestionnaireState.waiting_about_self)
     if lang == "kz":
@@ -754,11 +779,13 @@ async def process_ideal_neighbor(message: Message, state: FSMContext):
 
 @router.message(QuestionnaireState.waiting_about_self)
 async def process_about_self(message: Message, state: FSMContext):
-    about_text = message.text.strip()
-    await state.update_data(about_self_desc=about_text, raw_bio=about_text)
-
     data = await state.get_data()
     lang = data.get("lang", "kz")
+    about_text = await check_free_text(message, lang)
+    if about_text is None:
+        return
+    await state.update_data(about_self_desc=about_text, raw_bio=about_text)
+    data = await state.get_data()
 
     # Save to Database
     ai = get_ai_provider()
@@ -801,40 +828,21 @@ async def process_about_self(message: Message, state: FSMContext):
         profile.raw_bio = about_text
         profile.neighbor_criteria = criteria_dict
         profile.notifications_enabled = True
+        profile.is_active = True
 
-        # If user has apartment, also register active listing so others can find it!
-        if profile.has_apartment:
-            rooms_val = 2
-            if profile.rooms_count:
-                m = re.search(r"\d+", profile.rooms_count)
-                if m:
-                    rooms_val = int(m.group(0))
-
-            from app.services.listing_service import ListingService
-            await ListingService.create_listing(
-                session=session,
-                owner_id=user.id,
-                data={
-                    "city": profile.city,
-                    "district": profile.districts[0] if profile.districts else "Бостандыкский",
-                    "address_landmark": profile.apartment_address or profile.city,
-                    "housing_type": "flat",
-                    "total_rooms": rooms_val,
-                    "price_per_person": profile.budget_max,
-                    "utilities_status": "included",
-                    "utilities_included": True,
-                    "occupied_places": 1,
-                    "available_places": profile.neighbors_needed or 1,
-                    "move_in_date": profile.move_in_date,
-                    "preferred_gender": profile.preferred_gender,
-                    "conditions_description": profile.ideal_neighbor_desc,
-                    "neighbor_criteria": criteria_dict,
-                },
-            )
+        # Keep exactly one active listing for apartment owners, none for seekers
+        await ListingService.sync_profile_listing(session, user.id, profile, criteria_dict)
 
         await session.commit()
+        saved_user_id = user.id
 
     await state.clear()
+
+    # Tell people who are already searching that a matching person appeared
+    from app.bot.notifications import alert_users_about_new_profile
+    task = asyncio.create_task(alert_users_about_new_profile(message.bot, saved_user_id))
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
 
     # Step 18: Loading Screen & Animation
     search_screen = (

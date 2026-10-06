@@ -10,7 +10,7 @@
 - **База данных**: SQLite + aiosqlite, SQLAlchemy 2.0 (Async ORM)
 - **ИИ-провайдер**: Google GenAI SDK (`google-genai`), модель `gemini-2.5-flash` через Google Cloud Vertex AI (проект `korshi-tap`, локация `us-central1`, ключ `vertex_key.json`). Резерв: `MockAIProvider`.
 - **Веб-панель / Admin**: FastAPI + Jinja2 + Tailwind CSS (`http://127.0.0.1:8000/admin`)
-- **Тесты**: Pytest + pytest-asyncio (20 автоматических тестов)
+- **Тесты**: Pytest + pytest-asyncio (32 автоматических теста, изолированная временная БД и `AI_PROVIDER=mock` задаются в `tests/conftest.py`)
 
 ---
 
@@ -24,28 +24,34 @@ KORSHI TAP/
 │   │   ├── factory.py              # Фабрика провайдеров (get_ai_provider)
 │   │   ├── gemini_provider.py      # Реализация Vertex AI (Gemini 2.5 Flash, асинхронный клиент, thinking_budget=0)
 │   │   └── mock_provider.py        # Детерминированный офлайн-ранжировщик (fallback)
-│   ├── admin/                      # FastAPI админ-панель (статистика, модерация, сиды)
+│   ├── admin/                      # FastAPI админ-панель (HTTP Basic логин; /map публичная для Telegram WebApp)
 │   ├── bot/
 │   │   ├── bot.py                  # Инициализация бота, диспетчера и роутеров
 │   │   ├── handlers/
 │   │   │   ├── start.py            # Анкета /start (ветвление: есть квартира / ищу квартиру)
 │   │   │   ├── recommendations.py  # 2-этапный поиск: Холодный фильтр + AI-ранжирование
 │   │   │   ├── district_search.py  # Просмотр кандидатов по районам (без ИИ-блоков)
-│   │   │   └── profile.py          # Просмотр и редактирование профиля
+│   │   │   ├── profile.py          # Профиль: редактирование, уведомления, «нашёл соседа — скрыть анкету»
+│   │   │   ├── freshness.py        # Напоминания «ещё ищешь?» и автоскрытие брошенных анкет (фоновый цикл)
+│   │   │   └── swipe.py, who_is_looking.py, matches.py, owner_flow.py, seeker_flow.py
+│   │   │                           # Старый Tinder-слой (лайки/матчи). В главном меню кнопок нет.
+│   │   ├── notifications.py        # Уведомления, в т.ч. «появился новый подходящий человек»
 │   │   ├── keyboards/              # Клавиатуры (Reply & Inline)
-│   │   └── states/                 # FSM-состояния анкеты
+│   │   └── states.py               # FSM-состояния анкеты
 │   ├── db/
 │   │   ├── base.py                 # Async engine, sessionmaker, миграции init_db()
-│   │   └── models.py               # Модели: User, SeekerProfile, Listing, Like, Match
+│   │   └── models.py               # Модели: User, SeekerProfile, Listing, Like, Match, CandidateEvent
 │   ├── matching/
-│   │   ├── cold_search.py          # ЭТАП 1: Холодный фактологический поиск
+│   │   ├── cold_search.py          # ЭТАП 1: Холодный фактологический поиск (evaluate_candidate)
+│   │   ├── dates.py                # Разбор дат заезда («с 10 сентября», «Бір ай ішінде») в окна дней
+│   │   ├── engine.py, scoring.py, weights.py, filters.py  # Старый движок свайпов (веса из админки)
 │   │   └── reason_generator.py     # Вспомогательные генераторы текста
 │   ├── seeds/
 │   │   └── test_data.py            # Генератор 500 реалистичных пользователей (KZ/RU)
 │   ├── services/                   # Сервисы: UserService, ListingService, MatchService
 │   ├── config.py                   # Pydantic Settings
 │   └── constants.py                # Районы Алматы, Астаны, Шымкента, смежные районы
-├── tests/                          # 20 тестов (test_ai_ranking.py, test_matching_engine.py и др.)
+├── tests/                          # 32 теста (test_search_filters.py, test_ai_ranking.py и др.)
 ├── run_bot.py                      # Запуск Telegram-бота
 ├── run_admin.py                    # Запуск веб-админки
 ├── CLAUDE.md                       # Этот файл документации
@@ -64,6 +70,9 @@ KORSHI TAP/
 
 2. **Двухэтапный AI-поиск соседей ([`app/matching/cold_search.py`](file:///app/matching/cold_search.py) & [`app/ai/gemini_provider.py`](file:///app/ai/gemini_provider.py))**:
    - **Этап 1 (Холодный поиск)**: Строго фактологическая фильтрация по БД (город, район, взаимный пол, бюджет, дата).
+     - **Бюджет**: цена квартиры с человека может превышать бюджет ищущего максимум на 15%; у ко-сикеров больший бюджет — не более 1.5× меньшего. Нет данных — не фильтруем.
+     - **Дата**: `move_in_date` хранится текстом, `app/matching/dates.py` превращает его в окно дней; окна должны пересекаться с допуском 14 дней. «Пока просто ищу» / непонятный текст — не фильтруем.
+     - **Повторы**: уже показанные кандидаты (`CandidateEvent`, kind=`shown`) не показываются снова; когда все просмотрены — кнопка «🔁 Показать заново».
      - Если человек ищет квартиру: в первую очередь показывать людей, у кого **уже есть квартира** в этом районе с хотя бы 1 свободным местом.
      - **ВАЖНО**: количество искомых людей (`neighbors_needed`) **НЕ ДОЛЖНО** отсекать соискателей.
      - Если таких людей мало — дополнять ко-сикерами (теми, кто тоже ищет в районе).
@@ -78,7 +87,13 @@ KORSHI TAP/
    - В конфиг всегда передаётся `thinking_config=types.ThinkingConfig(thinking_budget=0)` — это исключает 40-секундную задержку рассуждений Gemini 2.5 Flash и ускоряет ответ до **1.5–2 секунд**.
    - Установлен таймаут `asyncio.wait_for(..., timeout=7.0)` с автоматическим переходом на `mock_fallback`.
 
-4. **Поиск по районам ([`app/bot/handlers/district_search.py`](file:///app/bot/handlers/district_search.py))**:
+4. **Анкета и объявление**: при сохранении анкеты `ListingService.sync_profile_listing` держит ровно одно активное объявление у владельца квартиры и архивирует объявления, если квартиры нет (без дублей при редактировании). Тексты «идеальный сосед» и «о себе» проходят `moderate_content`.
+
+5. **Уведомления и свежесть**:
+   - После сохранения анкеты в фоне запускается `alert_users_about_new_profile`: людям с включёнными уведомлениями, которым новый человек проходит холодный поиск, приходит его карточка (не более 20, каждому — один раз).
+   - Анкета без обновлений `LISTING_FRESHNESS_DAYS` дней получает «ещё ищешь?»; без ответа ещё столько же — скрывается. Заблокировавшие бота скрываются сразу.
+
+6. **Поиск по районам ([`app/bot/handlers/district_search.py`](file:///app/bot/handlers/district_search.py))**:
    - Работает напрямую из БД.
    - Передаётся `show_reason=False` — блок ИИ-совместимости (`💡 Неге сәйкес келеді:`) там намеренно **не выводится**.
 
@@ -87,7 +102,7 @@ KORSHI TAP/
 ## 🚀 Команды для работы
 
 ```bash
-# Запуск тестов (все 20 тестов должны проходить)
+# Запуск тестов (все 32 теста должны проходить)
 .venv/bin/pytest -v
 
 # Запуск Telegram-бота
@@ -107,3 +122,4 @@ KORSHI TAP/
 
 ## 🔒 Безопасность
 - Файл `vertex_key.json` (Google Cloud Service Account) и `korshi_tap.db` защищены в `.gitignore` и **никогда не должны попадать в публичные репозитории**.
+- Админка закрыта HTTP Basic (`ADMIN_USERNAME` / `ADMIN_PASSWORD` в `.env`). Если пароль не задан, при старте генерируется одноразовый и печатается в лог. Публичным остаётся только `/map` (Telegram WebApp) — она показывает имена и контакты активных анкет.

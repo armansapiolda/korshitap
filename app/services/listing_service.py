@@ -1,12 +1,13 @@
 """Listing service handling housing, multi-places, and freshness."""
 
+import re
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.constants import DEFAULT_CITY, LISTING_STATUS_ACTIVE, LISTING_STATUS_ARCHIVED
-from app.db.models import Listing
+from app.constants import DEFAULT_CITY, LISTING_STATUS_ACTIVE, LISTING_STATUS_ARCHIVED, LISTING_STATUS_PAUSED
+from app.db.models import Listing, SeekerProfile
 
 
 class ListingService:
@@ -48,6 +49,68 @@ class ListingService:
             last_confirmed_at=datetime.utcnow(),
         )
         session.add(listing)
+        await session.flush()
+        return listing
+
+    @staticmethod
+    async def sync_profile_listing(
+        session: AsyncSession,
+        owner_id: int,
+        profile: SeekerProfile,
+        criteria: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Listing]:
+        """Mirror the questionnaire into the owner's listing.
+
+        Has apartment -> update the latest listing (or create one), archive the rest.
+        No apartment -> archive all listings, so the user is not treated as an owner.
+        """
+        existing = (
+            await session.execute(
+                select(Listing)
+                .where(
+                    Listing.owner_id == owner_id,
+                    Listing.status.in_([LISTING_STATUS_ACTIVE, LISTING_STATUS_PAUSED]),
+                )
+                .order_by(Listing.id.desc())
+            )
+        ).scalars().all()
+
+        listing: Optional[Listing] = None
+        stale = list(existing)
+        if profile.has_apartment:
+            rooms_val = 2
+            if profile.rooms_count:
+                m = re.search(r"\d+", profile.rooms_count)
+                if m:
+                    rooms_val = int(m.group(0))
+            data = {
+                "city": profile.city,
+                "district": profile.districts[0] if profile.districts else "Бостандыкский",
+                "address_landmark": profile.apartment_address or profile.city,
+                "housing_type": "flat",
+                "total_rooms": rooms_val,
+                "price_per_person": profile.budget_max,
+                "utilities_status": "included",
+                "utilities_included": True,
+                "occupied_places": 1,
+                "available_places": profile.neighbors_needed or 1,
+                "move_in_date": profile.move_in_date,
+                "preferred_gender": profile.preferred_gender,
+                "conditions_description": profile.ideal_neighbor_desc,
+                "neighbor_criteria": criteria or {},
+            }
+            if existing:
+                listing = existing[0]
+                stale = list(existing[1:])
+                for key, value in data.items():
+                    setattr(listing, key, value)
+                listing.status = LISTING_STATUS_ACTIVE
+                listing.last_confirmed_at = datetime.utcnow()
+            else:
+                listing = await ListingService.create_listing(session, owner_id, data)
+
+        for old in stale:
+            old.status = LISTING_STATUS_ARCHIVED
         await session.flush()
         return listing
 

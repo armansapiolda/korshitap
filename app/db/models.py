@@ -12,6 +12,7 @@ from sqlalchemy import (
     JSON,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 
@@ -89,6 +90,7 @@ class SeekerProfile(Base):
     raw_bio = Column(Text, nullable=True)
     is_urgent = Column(Boolean, default=False)
     is_active = Column(Boolean, default=True)
+    last_freshness_ping_at = Column(DateTime, nullable=True)  # Last "still searching?" reminder
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -193,6 +195,24 @@ class SavedSearch(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     user = relationship("User")
+
+
+class CandidateEvent(Base):
+    """Who has already been shown to (or notified about) whom.
+
+    kind = "shown": candidate card was shown in recommendations, skip it next time.
+    kind = "notified": viewer got a "new matching person" notification about candidate.
+    """
+    __tablename__ = "candidate_events"
+    __table_args__ = (
+        UniqueConstraint("viewer_user_id", "candidate_user_id", "kind", name="uq_candidate_event"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    viewer_user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    candidate_user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    kind = Column(String(20), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 class Setting(Base):

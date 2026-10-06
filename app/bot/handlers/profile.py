@@ -5,7 +5,7 @@ from aiogram import F, Router
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.bot.keyboards.reply import (
     MENU_PROFILE_KZ,
@@ -13,9 +13,9 @@ from app.bot.keyboards.reply import (
     get_main_menu_keyboard,
 )
 from app.bot.states import QuestionnaireState
-from app.constants import DEFAULT_CITY
+from app.constants import DEFAULT_CITY, LISTING_STATUS_ACTIVE, LISTING_STATUS_PAUSED
 from app.db.base import async_session_factory
-from app.db.models import SeekerProfile, User
+from app.db.models import Listing, SeekerProfile, User
 from app.i18n import get_district_name
 from app.services.user_service import UserService
 
@@ -111,6 +111,9 @@ async def render_profile_view(event: Union[Message, CallbackQuery], user_id: int
             f"🎯 **Идеал көршің:**\n«{ideal_roommate}»\n\n"
             f"🔔 Хабарламалар: **{notif_str}**"
         )
+        if not profile.is_active:
+            text = "⏸ **Сауалнама жасырылған — сені ешкім көрмейді.**\n\n" + text
+        btn_pause = "▶️ Қайта іздеу" if not profile.is_active else "⏸ Көрші таптым — жасыру"
         btn_edit = "✏️ Сауалнаманы өзгерту"
         btn_notif = "🔕 Хабарламаны өшіру" if notif_enabled else "🔔 Хабарламаны қосу"
         btn_lang = "🌐 Тілді ауыстыру / Сменить язык"
@@ -143,6 +146,9 @@ async def render_profile_view(event: Union[Message, CallbackQuery], user_id: int
             f"🎯 **Идеальный сосед:**\n«{ideal_roommate}»\n\n"
             f"🔔 Уведомления: **{notif_str}**"
         )
+        if not profile.is_active:
+            text = "⏸ **Анкета скрыта — тебя никто не видит.**\n\n" + text
+        btn_pause = "▶️ Снова искать" if not profile.is_active else "⏸ Нашёл соседа — скрыть анкету"
         btn_edit = "✏️ Изменить анкету"
         btn_notif = "🔕 Выключить уведомления" if notif_enabled else "🔔 Включить уведомления"
         btn_lang = "🌐 Сменить язык / Тілді ауыстыру"
@@ -151,6 +157,7 @@ async def render_profile_view(event: Union[Message, CallbackQuery], user_id: int
         inline_keyboard=[
             [InlineKeyboardButton(text=btn_edit, callback_data="profile_edit")],
             [InlineKeyboardButton(text=btn_notif, callback_data="profile_toggle_notif")],
+            [InlineKeyboardButton(text=btn_pause, callback_data="profile_toggle_active")],
             [InlineKeyboardButton(text=btn_lang, callback_data="profile_change_lang")],
         ]
     )
@@ -196,6 +203,42 @@ async def cb_profile_toggle_notif(callback: CallbackQuery):
     else:
         alert = "Уведомления включены 🔔" if new_status else "Уведомления выключены 🔕"
 
+    await callback.answer(alert)
+    await render_profile_view(callback, callback.from_user.id)
+
+
+async def set_profile_active(session, user_id: int, active: bool) -> None:
+    """Hide or show the user's profile together with their listings."""
+    profile = await UserService.get_or_create_seeker_profile(session, user_id)
+    profile.is_active = active
+    profile.last_freshness_ping_at = None
+    from_status, to_status = (
+        (LISTING_STATUS_PAUSED, LISTING_STATUS_ACTIVE) if active else (LISTING_STATUS_ACTIVE, LISTING_STATUS_PAUSED)
+    )
+    if active and not profile.has_apartment:
+        return
+    await session.execute(
+        update(Listing)
+        .where(Listing.owner_id == user_id, Listing.status == from_status)
+        .values(status=to_status)
+    )
+
+
+@router.callback_query(F.data == "profile_toggle_active")
+async def cb_profile_toggle_active(callback: CallbackQuery):
+    """Hide the profile after finding a roommate, or start searching again."""
+    async with async_session_factory() as session:
+        user = await UserService.get_user_by_telegram_id(session, callback.from_user.id)
+        lang = user.language if user and user.language else "ru"
+        profile = await UserService.get_or_create_seeker_profile(session, user.id)
+        new_active = not profile.is_active
+        await set_profile_active(session, user.id, new_active)
+        await session.commit()
+
+    if lang == "kz":
+        alert = "Сауалнама қайта көрінеді ▶️" if new_active else "Сауалнама жасырылды. Құттықтаймын! 🎉"
+    else:
+        alert = "Анкета снова видна ▶️" if new_active else "Анкета скрыта. Поздравляю! 🎉"
     await callback.answer(alert)
     await render_profile_view(callback, callback.from_user.id)
 

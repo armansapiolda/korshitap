@@ -1,15 +1,20 @@
 """FastAPI Admin Web Application for KORSHI TAP."""
 
+import base64
+import binascii
+import logging
+import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 from fastapi import Depends, FastAPI, Form, Request, status
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.config import settings
 from app.constants import ALMATY_DISTRICTS, LISTING_STATUS_ACTIVE
 from app.db.base import get_db, init_db
 from app.db.models import Listing, Match, Report, Setting, User
@@ -27,6 +32,44 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="KORSHI TAP Admin Panel", lifespan=lifespan)
+logger = logging.getLogger(__name__)
+
+# Pages reachable without a password (Telegram WebApp map)
+PUBLIC_PATHS = {"/map"}
+
+ADMIN_PASSWORD = settings.ADMIN_PASSWORD
+if not ADMIN_PASSWORD:
+    ADMIN_PASSWORD = secrets.token_urlsafe(12)
+    logger.warning(
+        "ADMIN_PASSWORD is not set. One-time admin login: %s / %s",
+        settings.ADMIN_USERNAME,
+        ADMIN_PASSWORD,
+    )
+
+
+def _credentials_valid(auth_header: Optional[str]) -> bool:
+    if not auth_header or not auth_header.lower().startswith("basic "):
+        return False
+    try:
+        decoded = base64.b64decode(auth_header[6:]).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError):
+        return False
+    username, _, password = decoded.partition(":")
+    return secrets.compare_digest(username.encode(), settings.ADMIN_USERNAME.encode()) and secrets.compare_digest(
+        password.encode(), ADMIN_PASSWORD.encode()
+    )
+
+
+@app.middleware("http")
+async def require_admin_login(request: Request, call_next):
+    if request.url.path not in PUBLIC_PATHS and not _credentials_valid(request.headers.get("authorization")):
+        return Response(
+            "Authentication required",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            headers={"WWW-Authenticate": 'Basic realm="KORSHI TAP Admin"'},
+        )
+    return await call_next(request)
+
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 DISTRICT_COORDS = {
     "Бостандыкский": {"lat": 43.2185, "lng": 76.9275},

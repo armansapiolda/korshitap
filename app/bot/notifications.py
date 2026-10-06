@@ -249,3 +249,124 @@ async def send_mutual_match_celebration(
         )
     except Exception as e:
         logger.warning("Could not notify owner: %s", e)
+
+
+# ==============================================================================
+# NEW MATCHING PERSON ALERTS
+# ==============================================================================
+
+NEW_PROFILE_ALERT_LIMIT = 20
+
+
+async def find_users_to_alert_about(
+    session: AsyncSession,
+    new_user_id: int,
+    limit: int = NEW_PROFILE_ALERT_LIMIT,
+) -> list:
+    """Users with notifications on, for whom the new profile passes the cold search.
+
+    Returns list of (viewer_user, viewer_profile, new_user, new_profile).
+    Each viewer is alerted about a given person only once.
+    """
+    from app.db.models import CandidateEvent
+    from app.matching.cold_search import evaluate_candidate, load_active_listings
+    from app.services.candidate_event_service import KIND_NOTIFIED, KIND_SHOWN
+
+    new_user = (await session.execute(select(User).where(User.id == new_user_id))).scalar_one_or_none()
+    new_prof = (
+        await session.execute(select(SeekerProfile).where(SeekerProfile.user_id == new_user_id))
+    ).scalar_one_or_none()
+    if not new_user or not new_prof or not new_prof.is_active or new_user.is_blocked:
+        return []
+
+    listings = await load_active_listings(session)
+    already = set(
+        (
+            await session.execute(
+                select(CandidateEvent.viewer_user_id).where(
+                    CandidateEvent.candidate_user_id == new_user_id,
+                    CandidateEvent.kind.in_([KIND_NOTIFIED, KIND_SHOWN]),
+                )
+            )
+        ).scalars().all()
+    )
+
+    rows = (
+        await session.execute(
+            select(SeekerProfile, User)
+            .join(User, SeekerProfile.user_id == User.id)
+            .where(
+                SeekerProfile.is_active == True,
+                SeekerProfile.notifications_enabled == True,
+                User.is_blocked == False,
+                User.id != new_user_id,
+            )
+            .order_by(SeekerProfile.updated_at.desc())
+        )
+    ).all()
+
+    recipients = []
+    for prof, viewer in rows:
+        if viewer.id in already or not prof.districts:
+            continue
+        result = evaluate_candidate(
+            viewer,
+            prof,
+            listings.get(viewer.id),
+            new_user,
+            new_prof,
+            listings.get(new_user_id),
+            {prof.districts[0]},
+        )
+        if result is None:
+            continue
+        recipients.append((viewer, prof, new_user, new_prof))
+        if len(recipients) >= limit:
+            break
+    return recipients
+
+
+async def alert_users_about_new_profile(bot: Bot, new_user_id: int) -> int:
+    """Send "a new matching person appeared" cards. Returns number of messages sent."""
+    import asyncio
+    from app.bot.handlers.recommendations import format_candidate_card
+    from app.db.base import async_session_factory
+    from app.services.candidate_event_service import KIND_NOTIFIED, KIND_SHOWN, CandidateEventService
+
+    async with async_session_factory() as session:
+        recipients = await find_users_to_alert_about(session, new_user_id)
+        for viewer, _, _, _ in recipients:
+            await CandidateEventService.record(session, viewer.id, [new_user_id], KIND_NOTIFIED)
+            await CandidateEventService.record(session, viewer.id, [new_user_id], KIND_SHOWN)
+        await session.commit()
+
+    sent = 0
+    for viewer, viewer_prof, new_user, new_prof in recipients:
+        lang = viewer.language or "kz"
+        header = (
+            "🆕 **Саған сәйкес келетін жаңа адам пайда болды!**\n\n"
+            if lang == "kz"
+            else
+            "🆕 **Появился новый человек, который тебе подходит!**\n\n"
+        )
+        card = format_candidate_card(new_prof, new_user, viewer, viewer_prof, lang=lang, show_reason=False)
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[[
+                InlineKeyboardButton(
+                    text="💬 Сөйлесу" if lang == "kz" else "💬 Написать",
+                    url=get_chat_url(new_user),
+                )
+            ]]
+        )
+        try:
+            await bot.send_message(
+                chat_id=viewer.telegram_id,
+                text=header + card,
+                reply_markup=kb,
+                parse_mode="Markdown",
+            )
+            sent += 1
+        except Exception as e:
+            logger.info("Could not send new-profile alert to %s: %s", viewer.telegram_id, e)
+        await asyncio.sleep(0.05)  # stay well below Telegram rate limits
+    return sent

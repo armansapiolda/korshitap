@@ -6,7 +6,6 @@ from aiogram.types import CallbackQuery, Message
 
 from app.bot.bot_instance import get_bot
 from app.bot.keyboards.districts import get_single_district_keyboard
-from app.bot.keyboards.reply import MENU_SEARCH_KZ, MENU_SEARCH_RU
 from app.bot.keyboards.swipe import get_district_exhausted_keyboard, get_swipe_keyboard
 from app.bot.notifications import notify_owner_about_applicant, send_mutual_match_celebration
 from app.bot.states import SwipeState
@@ -130,18 +129,6 @@ async def send_next_card(
         await target.message.edit_text(card_text, reply_markup=kb, parse_mode="Markdown")
     else:
         await target.answer(card_text, reply_markup=kb, parse_mode="Markdown")
-
-
-@router.message(F.text.in_([MENU_SEARCH_RU, MENU_SEARCH_KZ]))
-async def menu_search_click(message: Message, state: FSMContext):
-    """Triggered from bottom reply keyboard: '🔍 Поиск' / '🔍 Іздеу'."""
-    await state.clear()
-    async with async_session_factory() as session:
-        lang = await UserService.get_user_language(session, message.from_user.id)
-
-    prompt = "🔎 Саған арналған нұсқаларды жүктеп жатырмын..." if lang == "kz" else "🔎 Ищу лучшие варианты для тебя..."
-    await message.answer(prompt)
-    await send_next_card(message, message.from_user.id, state, strict_district=True)
 
 
 @router.callback_query(F.data.startswith("swipe_like:"))

@@ -7,6 +7,7 @@ from aiogram import Dispatcher
 from app.bot.bot_instance import get_bot, get_dispatcher
 from app.bot.handlers import (
     district_search,
+    freshness,
     matches,
     owner_flow,
     profile,
@@ -46,6 +47,7 @@ def setup_routers(dispatcher: Dispatcher):
     dispatcher.include_router(matches.router)
     dispatcher.include_router(profile.router)
     dispatcher.include_router(reports.router)
+    dispatcher.include_router(freshness.router)
 
 
 async def main():
@@ -65,7 +67,11 @@ async def main():
 
     logger.info("Starting Telegram Bot long-polling (Local Machine)...")
     await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot)
+    freshness_task = asyncio.create_task(freshness.freshness_loop(bot))
+    try:
+        await dp.start_polling(bot)
+    finally:
+        freshness_task.cancel()
 
 
 if __name__ == "__main__":
