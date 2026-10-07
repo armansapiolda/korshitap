@@ -1,0 +1,15 @@
+[Unit]
+Description=KORSHI TAP: Telegram bot + admin panel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=korshi
+WorkingDirectory=/opt/korshitap
+ExecStart=/opt/korshitap/.venv/bin/python run_all.py
+Environment=PYTHONUNBUFFERED=1
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

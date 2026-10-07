@@ -55,6 +55,7 @@ KORSHI TAP/
 │   └── constants.py                # Районы Алматы, Астаны, Шымкента, смежные районы
 ├── migrations/                     # Alembic: 0001_baseline (старая схема), 0002_… (сиды, события, свежесть)
 ├── tests/                          # test_bot_flow.py (сквозные сценарии бота), test_search_filters.py, test_safety.py и др.
+├── deploy/                         # Сервер (Ubuntu, Google Cloud): setup.sh, update.sh, backup.sh, systemd-юнит; инструкция — DEPLOY.md
 ├── run_bot.py                      # Запуск Telegram-бота
 ├── run_admin.py                    # Запуск веб-админки
 ├── CLAUDE.md                       # Этот файл документации
